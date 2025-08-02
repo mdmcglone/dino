@@ -1,36 +1,9 @@
+// Pangaea supercontinent map generation
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use rand::prelude::*;
-use crate::terrain::TerrainType;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct HexCoord {
-    pub q: i32,
-    pub r: i32,
-}
-
-impl HexCoord {
-    pub fn new(q: i32, r: i32) -> Self {
-        Self { q, r }
-    }
-    
-    pub fn neighbors(&self) -> Vec<HexCoord> {
-        vec![
-            HexCoord::new(self.q + 1, self.r),
-            HexCoord::new(self.q - 1, self.r),
-            HexCoord::new(self.q, self.r + 1),
-            HexCoord::new(self.q, self.r - 1),
-            HexCoord::new(self.q + 1, self.r - 1),
-            HexCoord::new(self.q - 1, self.r + 1),
-        ]
-    }
-}
-
-pub trait Map {
-    fn get_tile(&self, coord: &HexCoord) -> TerrainType;
-    fn get_tiles(&self) -> &HashMap<HexCoord, TerrainType>;
-    fn width(&self) -> i32;
-    fn height(&self) -> i32;
-}
+use crate::core::HexCoord;
+use super::{terrain::TerrainType, base_map::Map};
 
 pub struct PangaeaMap {
     tiles: HashMap<HexCoord, TerrainType>,
@@ -50,7 +23,7 @@ impl PangaeaMap {
         let mut map = Self {
             tiles: HashMap::new(),
             width: 35,
-            height: 30,
+            height: 35,
         };
         map.generate();
         map
@@ -78,40 +51,56 @@ impl PangaeaMap {
         let center_r = self.height / 2;
         
         let regions = vec![
-            // Main body
+            // Center
             Region {
-                center: HexCoord::new(center_q, center_r),
-                radius: 8.0,
+                center: HexCoord::new(center_q-3, center_r+4),
+                radius: 6.0,
                 stretch_x: 1.2,
                 stretch_y: 1.0,
             },
-            // Northern extension (Laurasia)
+            // Center North
             Region {
-                center: HexCoord::new(center_q - 3, center_r - 5),
-                radius: 6.0,
-                stretch_x: 1.5,
-                stretch_y: 0.8,
-            },
-            // Southern extension (Gondwana)
-            Region {
-                center: HexCoord::new(center_q + 2, center_r + 6),
-                radius: 7.0,
-                stretch_x: 1.3,
-                stretch_y: 1.2,
-            },
-            // Western bulge
-            Region {
-                center: HexCoord::new(center_q - 7, center_r + 2),
+                center: HexCoord::new(center_q-7, center_r-3),
                 radius: 5.0,
-                stretch_x: 0.8,
-                stretch_y: 1.4,
+                stretch_x: 1.0,
+                stretch_y: 1.0,
             },
-            // Eastern peninsula
+            // South East
             Region {
-                center: HexCoord::new(center_q + 8, center_r - 2),
-                radius: 4.0,
-                stretch_x: 1.6,
+                center: HexCoord::new(center_q+3, center_r+11),
+                radius: 5.0,
+                stretch_x: 1.3,
+                stretch_y: 0.5,
+            },
+            // 
+            // NORTH EAST
+            // 
+            Region {
+                center: HexCoord::new(center_q+2, center_r-8),
+                radius: 5.0,
+                stretch_x: 1.3,
                 stretch_y: 0.7,
+            },
+            // Far North
+            Region {
+                center: HexCoord::new(center_q-3, center_r-12),
+                radius: 3.0,
+                stretch_x: 1.5,
+                stretch_y: 0.3,
+            },
+            // Northeastern Peninsula 1
+            Region {
+                center: HexCoord::new(center_q+9, center_r-5),
+                radius: 2.0,
+                stretch_x: 1.0,
+                stretch_y: 0.2,
+            },
+            // Northeastern Peninsula 2
+            Region {
+                center: HexCoord::new(center_q+13, center_r-4),
+                radius: 2.0,
+                stretch_x: 1.0,
+                stretch_y: 0.3,
             },
         ];
         

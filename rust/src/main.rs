@@ -1,14 +1,15 @@
-mod terrain;
-mod map;
-mod renderer;
+mod core;
+mod maps;
+mod rendering;
+mod input;
+mod game;
 
 use macroquad::prelude::*;
-use map::PangaeaMap;
-use renderer::HexMapRenderer;
+use game::GameState;
 
 fn window_conf() -> Conf {
     Conf {
-        window_title: "Neon Pangaea".to_owned(),
+        window_title: "Pangaea".to_owned(),
         window_width: 1400,
         window_height: 900,
         fullscreen: false,
@@ -19,50 +20,23 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    println!("\n=== PANGAEA ===");
-    println!("Generating supercontinent...");
+    // Create game state
+    let mut game_state = GameState::new();
     
-    // Create map and renderer
-    let pangaea_map = PangaeaMap::new();
-    let mut renderer = HexMapRenderer::new();
+    // Try to load the overlay image
+    game_state.load_overlay("pangaea_overlay.png").await;
     
-    println!("\nMap generated!");
-    println!("Use arrow keys to explore the world");
-    
+    // Main game loop
     loop {
-        // Handle input
-        let pan_speed = 10.0;
-        
-        if is_key_down(KeyCode::Left) {
-            renderer.pan_camera(pan_speed, 0.0);
-        }
-        if is_key_down(KeyCode::Right) {
-            renderer.pan_camera(-pan_speed, 0.0);
-        }
-        if is_key_down(KeyCode::Up) {
-            renderer.pan_camera(0.0, pan_speed);
-        }
-        if is_key_down(KeyCode::Down) {
-            renderer.pan_camera(0.0, -pan_speed);
-        }
-        
-        // Exit on ESC
-        if is_key_pressed(KeyCode::Escape) {
+        // Update game state and check for exit
+        if game_state.update() {
             break;
         }
         
-        // Clear screen with light blue-gray background
-        clear_background(Color::new(0.85, 0.85, 0.9, 1.0));
+        // Draw everything
+        game_state.draw();
         
-        // Draw grid effect
-        renderer.draw_grid_effect();
-        
-        // Draw hex map
-        renderer.draw_map(&pangaea_map);
-        
-        // Draw UI
-        renderer.draw_ui();
-        
+        // Next frame
         next_frame().await;
     }
 }
