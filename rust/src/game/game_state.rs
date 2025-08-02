@@ -3,13 +3,12 @@
 use macroquad::prelude::*;
 use crate::maps::PangaeaMap;
 use crate::rendering::HexMapRenderer;
-use crate::input::{KeyboardHandler, MouseHandler};
+use crate::input::KeyboardHandler;
 
 pub struct GameState {
     map: PangaeaMap,
     renderer: HexMapRenderer,
-    keyboard_handler: KeyboardHandler,
-    mouse_handler: MouseHandler,
+    input_handler: KeyboardHandler,
 }
 
 impl GameState {
@@ -26,8 +25,7 @@ impl GameState {
         Self {
             map,
             renderer: HexMapRenderer::new(),
-            keyboard_handler: KeyboardHandler::new(),
-            mouse_handler: MouseHandler::new(),
+            input_handler: KeyboardHandler::new(),
         }
     }
     
@@ -36,11 +34,8 @@ impl GameState {
     }
     
     pub fn update(&mut self) -> bool {
-        // Handle mouse input
-        self.mouse_handler.handle_input(&mut self.renderer);
-        
-        // Handle keyboard input and return true if should exit
-        self.keyboard_handler.handle_input(&mut self.renderer)
+        // Handle input and return true if should exit
+        self.input_handler.handle_input(&mut self.renderer)
     }
     
     pub fn draw(&self) {

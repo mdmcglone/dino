@@ -47,13 +47,12 @@ impl UIRenderer {
         // White background for controls
         draw_rectangle(
             10.0,
-            screen_height() - 220.0,
+            screen_height() - 195.0,
             260.0,
-            210.0,
+            185.0,
             Color::new(1.0, 1.0, 1.0, 0.8)
         );
         
-        draw_text("CLICK+DRAG: PAN", 20.0, screen_height() - 190.0, control_size, control_color);
         draw_text("ARROW KEYS: PAN", 20.0, screen_height() - 165.0, control_size, control_color);
         draw_text("+/-: ZOOM IN/OUT", 20.0, screen_height() - 140.0, control_size, control_color);
         draw_text("0: RESET ZOOM", 20.0, screen_height() - 115.0, control_size, control_color);
