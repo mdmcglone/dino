@@ -36,6 +36,18 @@ impl HexMapRenderer {
         self.camera_y -= dy;
     }
     
+    pub fn get_camera_x(&self) -> f32 {
+        self.camera_x
+    }
+    
+    pub fn get_camera_y(&self) -> f32 {
+        self.camera_y
+    }
+    
+    pub fn get_hex_size(&self) -> f32 {
+        self.hex_size
+    }
+    
     // Zoom controls
     pub fn zoom_in(&mut self) {
         self.zoom_level = (self.zoom_level * 1.1).min(3.0);
@@ -202,5 +214,73 @@ impl HexMapRenderer {
             self.overlay_renderer.get_offset(),
             self.overlay_renderer.has_texture(),
         );
+    }
+    
+    pub fn draw_stick_figure(&self, coord: &HexCoord) {
+        let (center_x, center_y) = self.hex_to_pixel(coord);
+        
+        // Scale stick figure with zoom
+        let scale = self.zoom_level;
+        
+        // Head
+        draw_circle(center_x, center_y - 10.0 * scale, 5.0 * scale, Color::new(0.1, 0.1, 0.1, 1.0));
+        
+        // Body
+        draw_line(
+            center_x, center_y - 5.0 * scale,
+            center_x, center_y + 10.0 * scale,
+            2.0 * scale,
+            Color::new(0.1, 0.1, 0.1, 1.0)
+        );
+        
+        // Arms
+        draw_line(
+            center_x - 8.0 * scale, center_y,
+            center_x + 8.0 * scale, center_y,
+            2.0 * scale,
+            Color::new(0.1, 0.1, 0.1, 1.0)
+        );
+        
+        // Left leg
+        draw_line(
+            center_x, center_y + 10.0 * scale,
+            center_x - 5.0 * scale, center_y + 20.0 * scale,
+            2.0 * scale,
+            Color::new(0.1, 0.1, 0.1, 1.0)
+        );
+        
+        // Right leg
+        draw_line(
+            center_x, center_y + 10.0 * scale,
+            center_x + 5.0 * scale, center_y + 20.0 * scale,
+            2.0 * scale,
+            Color::new(0.1, 0.1, 0.1, 1.0)
+        );
+    }
+    
+    pub fn draw_selection_highlight(&self, coord: &HexCoord) {
+        let (center_x, center_y) = self.hex_to_pixel(coord);
+        
+        // Calculate hexagon vertices
+        let mut vertices = Vec::new();
+        for i in 0..6 {
+            let angle = std::f32::consts::PI / 3.0 * i as f32;
+            vertices.push(Vec2::new(
+                center_x + self.hex_size * angle.cos(),
+                center_y + self.hex_size * angle.sin()
+            ));
+        }
+        
+        // Draw thick yellow border for selection
+        let highlight_color = Color::new(1.0, 1.0, 0.0, 0.8); // Yellow
+        for i in 0..vertices.len() {
+            let next = (i + 1) % vertices.len();
+            draw_line(
+                vertices[i].x, vertices[i].y,
+                vertices[next].x, vertices[next].y,
+                3.0,
+                highlight_color
+            );
+        }
     }
 } 

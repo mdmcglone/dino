@@ -1,45 +1,39 @@
-// Mouse input handling for panning
+// Mouse input handling
 
 use macroquad::prelude::*;
+use crate::core::HexCoord;
 use crate::rendering::HexMapRenderer;
 
-pub struct MouseHandler {
-    is_dragging: bool,
-    last_mouse_pos: (f32, f32),
-}
+pub struct MouseHandler;
 
 impl MouseHandler {
     pub fn new() -> Self {
-        Self {
-            is_dragging: false,
-            last_mouse_pos: (0.0, 0.0),
-        }
+        Self
     }
     
-    pub fn handle_input(&mut self, renderer: &mut HexMapRenderer) {
-        let mouse_pos = mouse_position();
+    pub fn pixel_to_hex(renderer: &HexMapRenderer, mouse_x: f32, mouse_y: f32) -> HexCoord {
+        // This is the inverse of hex_to_pixel
+        // For pointy-top hexagons with offset coordinates
+        let adjusted_x = mouse_x - 100.0 + renderer.get_camera_x();
+        let adjusted_y = mouse_y - 100.0 + renderer.get_camera_y();
         
-        // Start dragging on left mouse button press
-        if is_mouse_button_pressed(MouseButton::Left) {
-            self.is_dragging = true;
-            self.last_mouse_pos = mouse_pos;
-        }
+        let hex_size = renderer.get_hex_size();
+        let sqrt3 = 3.0_f32.sqrt();
         
-        // Stop dragging on mouse button release
-        if is_mouse_button_released(MouseButton::Left) {
-            self.is_dragging = false;
-        }
+        // Approximate q coordinate
+        let q = (adjusted_x * 2.0 / 3.0 / hex_size).round() as i32;
         
-        // Pan camera while dragging
-        if self.is_dragging {
-            let delta_x = mouse_pos.0 - self.last_mouse_pos.0;
-            let delta_y = mouse_pos.1 - self.last_mouse_pos.1;
-            
-            // Pan in the opposite direction of mouse movement
-            // (moving mouse right should move the map left, etc.)
-            renderer.pan_camera(delta_x, delta_y);
-            
-            self.last_mouse_pos = mouse_pos;
-        }
+        // Calculate y offset for this column
+        let y_offset = if q % 2 == 1 { hex_size * sqrt3 / 2.0 } else { 0.0 };
+        
+        // Calculate r coordinate
+        let r = ((adjusted_y - y_offset) / (hex_size * sqrt3)).round() as i32;
+        
+        HexCoord::new(q, r)
+    }
+    
+    pub fn get_mouse_hex(&self, renderer: &HexMapRenderer) -> Option<HexCoord> {
+        let (mouse_x, mouse_y) = mouse_position();
+        Some(Self::pixel_to_hex(renderer, mouse_x, mouse_y))
     }
 } 
