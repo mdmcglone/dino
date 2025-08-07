@@ -1,0 +1,11 @@
+/Users/emdmcglone/Desktop/personal/games/dino/rust/target/debug/deps/quad_snd-c7f21960d89e843f.rmeta: /Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/lib.rs /Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/error.rs /Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/coreaudio_snd.rs /Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/coreaudio/coreaudio.rs /Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/mixer.rs
+
+/Users/emdmcglone/Desktop/personal/games/dino/rust/target/debug/deps/libquad_snd-c7f21960d89e843f.rlib: /Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/lib.rs /Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/error.rs /Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/coreaudio_snd.rs /Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/coreaudio/coreaudio.rs /Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/mixer.rs
+
+/Users/emdmcglone/Desktop/personal/games/dino/rust/target/debug/deps/quad_snd-c7f21960d89e843f.d: /Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/lib.rs /Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/error.rs /Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/coreaudio_snd.rs /Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/coreaudio/coreaudio.rs /Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/mixer.rs
+
+/Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/lib.rs:
+/Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/error.rs:
+/Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/coreaudio_snd.rs:
+/Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/coreaudio/coreaudio.rs:
+/Users/emdmcglone/.cargo/registry/src/index.crates.io-6f17d22bba15001f/quad-snd-0.2.8/src/mixer.rs:
