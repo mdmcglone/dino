@@ -26,6 +26,9 @@ async fn main() {
     // Try to load the overlay image
     game_state.load_overlay("pangaea_overlay.png").await;
     
+    // Load player sprite
+    game_state.load_player_sprite("sprites/trex.png").await;
+    
     // Main game loop
     loop {
         // Update game state and check for exit

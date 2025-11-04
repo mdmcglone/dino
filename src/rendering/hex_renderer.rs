@@ -14,6 +14,7 @@ pub struct HexMapRenderer {
     base_hex_size: f32,
     overlay_renderer: OverlayRenderer,
     ui_renderer: UIRenderer,
+    player_sprite: Option<Texture2D>,  // ADD THIS LINE
 }
 
 impl HexMapRenderer {
@@ -27,6 +28,20 @@ impl HexMapRenderer {
             base_hex_size: base_size,
             overlay_renderer: OverlayRenderer::new(),
             ui_renderer: UIRenderer::new(),
+            player_sprite: None,  // ADD THIS LINE
+        }
+    }
+
+    pub async fn load_player_sprite(&mut self, path: &str) {
+        match load_texture(path).await {
+            Ok(texture) => {
+                texture.set_filter(FilterMode::Nearest); // Crisp pixel art
+                self.player_sprite = Some(texture);
+                println!("Player sprite loaded successfully");
+            }
+            Err(e) => {
+                println!("Failed to load player sprite: {:?}", e);
+            }
         }
     }
     
@@ -155,27 +170,27 @@ impl HexMapRenderer {
             );
         }
         
-        // Draw coordinates on the hex
-        let coord_text = format!("{},{}", coord.q, coord.r);
-        let text_size = 12.0 * self.zoom_level;
-        let text_color = Color::new(0.0, 0.0, 0.0, 0.8); // Black with slight transparency
+        // // Draw coordinates on the hex
+        // let coord_text = format!("{},{}", coord.q, coord.r);
+        // let text_size = 12.0 * self.zoom_level;
+        // let text_color = Color::new(0.0, 0.0, 0.0, 0.8); // Black with slight transparency
         
-        // Center the text
-        let text_width = coord_text.len() as f32 * text_size * 0.5;
-        let text_x = center_x - text_width / 2.0;
-        let text_y = center_y + text_size / 3.0;
+        // // Center the text
+        // let text_width = coord_text.len() as f32 * text_size * 0.5;
+        // let text_x = center_x - text_width / 2.0;
+        // let text_y = center_y + text_size / 3.0;
         
-        // Draw white background for better readability
-        draw_rectangle(
-            text_x - 2.0,
-            text_y - text_size + 2.0,
-            text_width + 4.0,
-            text_size,
-            Color::new(1.0, 1.0, 1.0, 0.7)
-        );
+        // // Draw white background for better readability
+        // draw_rectangle(
+        //     text_x - 2.0,
+        //     text_y - text_size + 2.0,
+        //     text_width + 4.0,
+        //     text_size,
+        //     Color::new(1.0, 1.0, 1.0, 0.7)
+        // );
         
-        // Draw the coordinate text
-        draw_text(&coord_text, text_x, text_y, text_size, text_color);
+        // // Draw the coordinate text
+        // draw_text(&coord_text, text_x, text_y, text_size, text_color);
     }
     
     pub fn draw_map(&self, map: &dyn Map) {
@@ -216,48 +231,65 @@ impl HexMapRenderer {
         );
     }
     
-    pub fn draw_stick_figure(&self, coord: &HexCoord) {
+    pub fn draw_player(&self, coord: &HexCoord) {
         let (center_x, center_y) = self.hex_to_pixel(coord);
         
-        // Scale stick figure with zoom
-        let scale = self.zoom_level;
-        
-        // Head
-        draw_circle(center_x, center_y - 10.0 * scale, 5.0 * scale, Color::new(0.1, 0.1, 0.1, 1.0));
-        
-        // Body
-        draw_line(
-            center_x, center_y - 5.0 * scale,
-            center_x, center_y + 10.0 * scale,
-            2.0 * scale,
-            Color::new(0.1, 0.1, 0.1, 1.0)
-        );
-        
-        // Arms
-        draw_line(
-            center_x - 8.0 * scale, center_y,
-            center_x + 8.0 * scale, center_y,
-            2.0 * scale,
-            Color::new(0.1, 0.1, 0.1, 1.0)
-        );
-        
-        // Left leg
-        draw_line(
-            center_x, center_y + 10.0 * scale,
-            center_x - 5.0 * scale, center_y + 20.0 * scale,
-            2.0 * scale,
-            Color::new(0.1, 0.1, 0.1, 1.0)
-        );
-        
-        // Right leg
-        draw_line(
-            center_x, center_y + 10.0 * scale,
-            center_x + 5.0 * scale, center_y + 20.0 * scale,
-            2.0 * scale,
-            Color::new(0.1, 0.1, 0.1, 1.0)
-        );
-    }
-    
+        if let Some(sprite) = &self.player_sprite {
+            // Draw the sprite centered on the hex
+            let sprite_size = 40.0 * self.zoom_level; // Adjust size as needed
+            let x = center_x - sprite_size / 2.0;
+            let y = center_y - sprite_size / 2.0;
+            
+            draw_texture_ex(
+                *sprite,
+                x,
+                y,
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(Vec2::new(sprite_size, sprite_size)),
+                    ..Default::default()
+                }
+            );
+        } else {
+            // Fallback to stick figure if sprite not loaded
+            let scale = self.zoom_level;
+            
+            // Head
+            draw_circle(center_x, center_y - 10.0 * scale, 5.0 * scale, Color::new(0.1, 0.1, 0.1, 1.0));
+            
+            // Body
+            draw_line(
+                center_x, center_y - 5.0 * scale,
+                center_x, center_y + 10.0 * scale,
+                2.0 * scale,
+                Color::new(0.1, 0.1, 0.1, 1.0)
+            );
+            
+            // Arms
+            draw_line(
+                center_x - 8.0 * scale, center_y,
+                center_x + 8.0 * scale, center_y,
+                2.0 * scale,
+                Color::new(0.1, 0.1, 0.1, 1.0)
+            );
+            
+            // Left leg
+            draw_line(
+                center_x, center_y + 10.0 * scale,
+                center_x - 5.0 * scale, center_y + 20.0 * scale,
+                2.0 * scale,
+                Color::new(0.1, 0.1, 0.1, 1.0)
+            );
+            
+            // Right leg
+            draw_line(
+                center_x, center_y + 10.0 * scale,
+                center_x + 5.0 * scale, center_y + 20.0 * scale,
+                2.0 * scale,
+                Color::new(0.1, 0.1, 0.1, 1.0)
+            );
+        }
+    }    
     pub fn draw_selection_highlight(&self, coord: &HexCoord) {
         let (center_x, center_y) = self.hex_to_pixel(coord);
         
@@ -282,5 +314,62 @@ impl HexMapRenderer {
                 highlight_color
             );
         }
+    }
+    
+    pub fn draw_movement_arrow(&self, from: &HexCoord, to: &HexCoord, progress: f32) {
+        let (from_x, from_y) = self.hex_to_pixel(from);
+        let (to_x, to_y) = self.hex_to_pixel(to);
+        
+        // Calculate arrow direction and length
+        let dx = to_x - from_x;
+        let dy = to_y - from_y;
+        let total_length = (dx * dx + dy * dy).sqrt();
+        
+        // Normalize direction
+        let dir_x = dx / total_length;
+        let dir_y = dy / total_length;
+        
+        // Calculate the current end point based on progress
+        let current_length = total_length * progress;
+        let end_x = from_x + dir_x * current_length;
+        let end_y = from_y + dir_y * current_length;
+        
+        // Draw the main arrow shaft
+        let arrow_color = Color::new(0.2, 0.6, 1.0, 0.9); // Bright blue
+        let shaft_thickness = 4.0 * self.zoom_level;
+        draw_line(from_x, from_y, end_x, end_y, shaft_thickness, arrow_color);
+        
+        // Draw arrowhead if we're past 20% progress
+        if progress > 0.2 {
+            let arrowhead_size = 12.0 * self.zoom_level;
+            
+            // Calculate perpendicular vector
+            let perp_x = -dir_y;
+            let perp_y = dir_x;
+            
+            // Arrowhead points
+            let head_back = arrowhead_size * 0.8;
+            let head_base_x = end_x - dir_x * head_back;
+            let head_base_y = end_y - dir_y * head_back;
+            
+            let wing_offset = arrowhead_size * 0.5;
+            let left_x = head_base_x + perp_x * wing_offset;
+            let left_y = head_base_y + perp_y * wing_offset;
+            let right_x = head_base_x - perp_x * wing_offset;
+            let right_y = head_base_y - perp_y * wing_offset;
+            
+            // Draw filled arrowhead triangle
+            draw_triangle(
+                Vec2::new(end_x, end_y),
+                Vec2::new(left_x, left_y),
+                Vec2::new(right_x, right_y),
+                arrow_color
+            );
+        }
+        
+        // Draw a glowing circle at the current position
+        let glow_radius = 6.0 * self.zoom_level;
+        draw_circle(end_x, end_y, glow_radius, Color::new(1.0, 1.0, 1.0, 0.8));
+        draw_circle(end_x, end_y, glow_radius * 0.6, arrow_color);
     }
 } 
