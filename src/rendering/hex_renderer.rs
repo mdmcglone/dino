@@ -14,7 +14,7 @@ pub struct HexMapRenderer {
     base_hex_size: f32,
     overlay_renderer: OverlayRenderer,
     ui_renderer: UIRenderer,
-    player_sprite: Option<Texture2D>,  // ADD THIS LINE
+    team_sprites: Vec<Option<Texture2D>>,
 }
 
 impl HexMapRenderer {
@@ -28,19 +28,21 @@ impl HexMapRenderer {
             base_hex_size: base_size,
             overlay_renderer: OverlayRenderer::new(),
             ui_renderer: UIRenderer::new(),
-            player_sprite: None,  // ADD THIS LINE
+            team_sprites: vec![None, None],
         }
     }
 
-    pub async fn load_player_sprite(&mut self, path: &str) {
+    pub async fn load_team_sprite(&mut self, team: usize, path: &str) {
         match load_texture(path).await {
             Ok(texture) => {
                 texture.set_filter(FilterMode::Nearest); // Crisp pixel art
-                self.player_sprite = Some(texture);
-                println!("Player sprite loaded successfully");
+                if team < self.team_sprites.len() {
+                    self.team_sprites[team] = Some(texture);
+                    println!("Team {} sprite loaded successfully", team);
+                }
             }
             Err(e) => {
-                println!("Failed to load player sprite: {:?}", e);
+                println!("Failed to load team {} sprite: {:?}", team, e);
             }
         }
     }
@@ -231,13 +233,29 @@ impl HexMapRenderer {
         );
     }
     
-    pub fn draw_player(&self, coord: &HexCoord) {
+    pub fn draw_player(&self, coord: &HexCoord, team: usize) {
+        self.draw_player_with_offset(coord, team, 0.0);
+    }
+    
+    pub fn draw_player_with_offset(&self, coord: &HexCoord, team: usize, offset_factor: f32) {
         let (center_x, center_y) = self.hex_to_pixel(coord);
         
-        if let Some(sprite) = &self.player_sprite {
+        // Apply horizontal offset for side-by-side battles (half sprite width from center)
+        let sprite_size = 40.0 * self.zoom_level;
+        let offset_x = offset_factor * sprite_size;
+        let draw_x = center_x + offset_x;
+        
+        // Get sprite for this team
+        let sprite = if team < self.team_sprites.len() {
+            self.team_sprites[team].as_ref()
+        } else {
+            None
+        };
+        
+        if let Some(sprite) = sprite {
             // Draw the sprite centered on the hex
-            let sprite_size = 40.0 * self.zoom_level; // Adjust size as needed
-            let x = center_x - sprite_size / 2.0;
+            let sprite_size = 40.0 * self.zoom_level;
+            let x = draw_x - sprite_size / 2.0;
             let y = center_y - sprite_size / 2.0;
             
             draw_texture_ex(
@@ -255,36 +273,36 @@ impl HexMapRenderer {
             let scale = self.zoom_level;
             
             // Head
-            draw_circle(center_x, center_y - 10.0 * scale, 5.0 * scale, Color::new(0.1, 0.1, 0.1, 1.0));
+            draw_circle(draw_x, center_y - 10.0 * scale, 5.0 * scale, Color::new(0.1, 0.1, 0.1, 1.0));
             
             // Body
             draw_line(
-                center_x, center_y - 5.0 * scale,
-                center_x, center_y + 10.0 * scale,
+                draw_x, center_y - 5.0 * scale,
+                draw_x, center_y + 10.0 * scale,
                 2.0 * scale,
                 Color::new(0.1, 0.1, 0.1, 1.0)
             );
             
             // Arms
             draw_line(
-                center_x - 8.0 * scale, center_y,
-                center_x + 8.0 * scale, center_y,
+                draw_x - 8.0 * scale, center_y,
+                draw_x + 8.0 * scale, center_y,
                 2.0 * scale,
                 Color::new(0.1, 0.1, 0.1, 1.0)
             );
             
             // Left leg
             draw_line(
-                center_x, center_y + 10.0 * scale,
-                center_x - 5.0 * scale, center_y + 20.0 * scale,
+                draw_x, center_y + 10.0 * scale,
+                draw_x - 5.0 * scale, center_y + 20.0 * scale,
                 2.0 * scale,
                 Color::new(0.1, 0.1, 0.1, 1.0)
             );
             
             // Right leg
             draw_line(
-                center_x, center_y + 10.0 * scale,
-                center_x + 5.0 * scale, center_y + 20.0 * scale,
+                draw_x, center_y + 10.0 * scale,
+                draw_x + 5.0 * scale, center_y + 20.0 * scale,
                 2.0 * scale,
                 Color::new(0.1, 0.1, 0.1, 1.0)
             );
@@ -371,5 +389,95 @@ impl HexMapRenderer {
         let glow_radius = 6.0 * self.zoom_level;
         draw_circle(end_x, end_y, glow_radius, Color::new(1.0, 1.0, 1.0, 0.8));
         draw_circle(end_x, end_y, glow_radius * 0.6, arrow_color);
+    }
+    
+    pub fn draw_stack_count(&self, coord: &HexCoord, count: usize) {
+        self.draw_team_stack_count(coord, 0, count, 0.0);
+    }
+    
+    pub fn draw_team_stack_count(&self, coord: &HexCoord, _team: usize, count: usize, offset_factor: f32) {
+        let (center_x, center_y) = self.hex_to_pixel(coord);
+        
+        // Apply horizontal offset for side-by-side battles (half sprite width from center)
+        let sprite_size = 40.0 * self.zoom_level;
+        let offset_x = offset_factor * sprite_size;
+        let draw_x = center_x + offset_x;
+        
+        // Position the count indicator in the bottom-right corner of the sprite
+        let count_x = draw_x + sprite_size * 0.3;
+        let count_y = center_y + sprite_size * 0.3;
+        
+        let text = count.to_string();
+        let font_size = 20.0 * self.zoom_level;
+        
+        // Draw background circle
+        let bg_radius = 10.0 * self.zoom_level;
+        draw_circle(count_x, count_y, bg_radius, Color::new(0.0, 0.0, 0.0, 0.8));
+        
+        // Draw white border
+        draw_circle_lines(count_x, count_y, bg_radius, 1.5, Color::new(1.0, 1.0, 1.0, 1.0));
+        
+        // Draw count text
+        let text_width = measure_text(&text, None, font_size as u16, 1.0).width;
+        draw_text(
+            &text,
+            count_x - text_width / 2.0,
+            count_y + font_size * 0.35,
+            font_size,
+            Color::new(1.0, 1.0, 1.0, 1.0)
+        );
+    }
+    
+    pub fn draw_battle_indicator(&self, coord: &HexCoord) {
+        let (center_x, center_y) = self.hex_to_pixel(coord);
+        
+        // Draw crossed swords icon above the tile
+        let indicator_y = center_y - self.hex_size * 0.8;
+        let sword_size = 8.0 * self.zoom_level;
+        
+        // Red background circle
+        draw_circle(center_x, indicator_y, 12.0 * self.zoom_level, Color::new(0.8, 0.0, 0.0, 0.9));
+        
+        // Draw simple "X" for battle indicator
+        let x_size = sword_size;
+        draw_line(
+            center_x - x_size, indicator_y - x_size,
+            center_x + x_size, indicator_y + x_size,
+            3.0 * self.zoom_level,
+            Color::new(1.0, 1.0, 1.0, 1.0)
+        );
+        draw_line(
+            center_x - x_size, indicator_y + x_size,
+            center_x + x_size, indicator_y - x_size,
+            3.0 * self.zoom_level,
+            Color::new(1.0, 1.0, 1.0, 1.0)
+        );
+    }
+    
+    pub fn draw_selection_box(&self, start: (f32, f32), current: (f32, f32)) {
+        let (start_x, start_y) = start;
+        let (current_x, current_y) = current;
+        
+        // Calculate rectangle bounds
+        let min_x = start_x.min(current_x);
+        let max_x = start_x.max(current_x);
+        let min_y = start_y.min(current_y);
+        let max_y = start_y.max(current_y);
+        
+        let width = max_x - min_x;
+        let height = max_y - min_y;
+        
+        // Draw filled rectangle with transparency
+        draw_rectangle(
+            min_x, min_y, width, height,
+            Color::new(0.0, 1.0, 0.0, 0.2) // Light green fill
+        );
+        
+        // Draw border
+        draw_rectangle_lines(
+            min_x, min_y, width, height,
+            3.0,
+            Color::new(0.0, 1.0, 0.0, 0.9) // Bright green border
+        );
     }
 } 

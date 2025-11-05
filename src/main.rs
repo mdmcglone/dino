@@ -23,11 +23,9 @@ async fn main() {
     // Create game state
     let mut game_state = GameState::new();
     
-    // Try to load the overlay image
-    game_state.load_overlay("pangaea_overlay.png").await;
-    
-    // Load player sprite
-    game_state.load_player_sprite("sprites/trex.png").await;
+    // Load team sprites
+    game_state.load_team_sprite(0, "sprites/trex.png").await;
+    game_state.load_team_sprite(1, "sprites/bronto.png").await;
     
     // Main game loop
     loop {
