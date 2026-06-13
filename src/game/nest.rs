@@ -1,27 +1,38 @@
-use crate::core::HexCoord;
+use std::collections::HashSet;
 
-#[derive(Debug, Clone, Copy)]
+use crate::core::{HexCoord, OffsetFarmZone};
+
+pub const NEST_FARM_RADIUS: i32 = 2;
+
+#[derive(Debug, Clone)]
 pub struct Nest {
     pub team: usize,
     pub position: HexCoord,
-    last_spawn_time: f64,
+    pub food: f32,
+    farm_within: HashSet<HexCoord>,
 }
 
 impl Nest {
-    pub fn new(team: usize, position: HexCoord, spawn_time: f64) -> Self {
+    pub fn new(team: usize, position: HexCoord, already_claimed: &HashSet<HexCoord>) -> Self {
+        let farm_within = OffsetFarmZone::compute_claimed(
+            &position,
+            NEST_FARM_RADIUS,
+            already_claimed,
+        );
         Self {
             team,
             position,
-            last_spawn_time: spawn_time,
+            food: 0.0,
+            farm_within,
         }
     }
 
-    pub fn should_spawn(&self, current_time: f64, interval: f64) -> bool {
-        current_time - self.last_spawn_time >= interval
+    pub fn is_in_farm_range(&self, coord: &HexCoord) -> bool {
+        self.farm_within.contains(coord)
     }
 
-    pub fn mark_spawned(&mut self, current_time: f64) {
-        self.last_spawn_time = current_time;
+    pub fn farm_within(&self) -> &HashSet<HexCoord> {
+        &self.farm_within
     }
 
     /// Spawn positions for the three team members: above, bottom-left, bottom-right of the nest.

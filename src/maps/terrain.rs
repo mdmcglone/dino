@@ -43,4 +43,14 @@ impl TerrainType {
             TerrainType::Jungle => Color::new(0.0/255.0, 70.0/255.0, 0.0/255.0, 1.0),
         }
     }
+
+    pub fn food_gather_rate(&self) -> f64 {
+        match self {
+            TerrainType::Jungle => 3.0,
+            TerrainType::Forest => 2.0,
+            TerrainType::Grass => 1.0,
+            TerrainType::Savanna | TerrainType::ShallowWater => 0.5,
+            TerrainType::Desert | TerrainType::Mountain | TerrainType::Water | TerrainType::Snow => 0.0,
+        }
+    }
 } 

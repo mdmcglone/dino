@@ -227,6 +227,94 @@ impl HexMapRenderer {
     pub fn draw_ui(&self) {
         self.ui_renderer.draw(self.zoom_level);
     }
+
+    fn nest_team_color(team: usize) -> Color {
+        match team {
+            0 => Color::new(0.85, 0.55, 0.1, 0.95),
+            1 => Color::new(0.15, 0.65, 0.55, 0.95),
+            _ => Color::new(0.6, 0.6, 0.6, 0.95),
+        }
+    }
+
+    pub fn draw_nest_farm_zone(&self, nest: &Nest) {
+        let team_color = Self::nest_team_color(nest.team);
+        let border_color = Color::new(team_color.r, team_color.g, team_color.b, 0.55);
+        let thickness = 2.5 * self.zoom_level;
+        let farm_within = nest.farm_within();
+
+        for coord in nest.farm_within() {
+            let (center_x, center_y) = self.hex_to_pixel(coord);
+            if center_x < -self.hex_size * 2.0 || center_x > screen_width() + self.hex_size * 2.0
+                || center_y < -self.hex_size * 2.0 || center_y > screen_height() + self.hex_size * 2.0
+            {
+                continue;
+            }
+
+            let mut vertices = [Vec2::ZERO; 6];
+            for i in 0..6 {
+                let angle = std::f32::consts::PI / 3.0 * i as f32;
+                vertices[i] = Vec2::new(
+                    center_x + self.hex_size * angle.cos(),
+                    center_y + self.hex_size * angle.sin(),
+                );
+            }
+
+            for neighbor in coord.offset_neighbors() {
+                if farm_within.contains(&neighbor) {
+                    continue;
+                }
+
+                let (neighbor_x, neighbor_y) = self.hex_to_pixel(&neighbor);
+                let edge_mid_x = (center_x + neighbor_x) / 2.0;
+                let edge_mid_y = (center_y + neighbor_y) / 2.0;
+
+                let mut best_edge = 0;
+                let mut best_dist_sq = f32::MAX;
+                for i in 0..6 {
+                    let next = (i + 1) % 6;
+                    let mid_x = (vertices[i].x + vertices[next].x) / 2.0;
+                    let mid_y = (vertices[i].y + vertices[next].y) / 2.0;
+                    let dx = mid_x - edge_mid_x;
+                    let dy = mid_y - edge_mid_y;
+                    let dist_sq = dx * dx + dy * dy;
+                    if dist_sq < best_dist_sq {
+                        best_dist_sq = dist_sq;
+                        best_edge = i;
+                    }
+                }
+
+                let next = (best_edge + 1) % 6;
+                draw_line(
+                    vertices[best_edge].x, vertices[best_edge].y,
+                    vertices[next].x, vertices[next].y,
+                    thickness,
+                    border_color,
+                );
+            }
+        }
+    }
+
+    pub fn draw_nest_food_bar(&self, nest: &Nest, food_cap: f32) {
+        let (center_x, center_y) = self.hex_to_pixel(&nest.position);
+        if center_x < -self.hex_size * 2.0 || center_x > screen_width() + self.hex_size * 2.0
+            || center_y < -self.hex_size * 2.0 || center_y > screen_height() + self.hex_size * 2.0
+        {
+            return;
+        }
+
+        let bar_width = self.hex_size * 1.4;
+        let bar_height = 7.0 * self.zoom_level;
+        let bar_x = center_x - bar_width / 2.0;
+        let bar_y = center_y + self.hex_size * 0.55;
+        let progress = (nest.food / food_cap).clamp(0.0, 1.0);
+        let fill_color = Self::nest_team_color(nest.team);
+
+        draw_rectangle(bar_x, bar_y, bar_width, bar_height, Color::new(0.15, 0.15, 0.15, 0.75));
+        if progress > 0.0 {
+            draw_rectangle(bar_x, bar_y, bar_width * progress, bar_height, fill_color);
+        }
+        draw_rectangle_lines(bar_x, bar_y, bar_width, bar_height, 1.5, Color::new(1.0, 1.0, 1.0, 0.85));
+    }
     
     pub fn draw_player(&self, coord: &HexCoord, team: usize) {
         self.draw_player_with_offset(coord, team, 0.0);
@@ -427,11 +515,7 @@ impl HexMapRenderer {
         let (center_x, center_y) = self.hex_to_pixel(&nest.position);
         let arm_length = self.hex_size * 0.45;
         let thickness = 3.0 * self.zoom_level;
-        let color = match nest.team {
-            0 => Color::new(0.85, 0.55, 0.1, 0.95),
-            1 => Color::new(0.15, 0.65, 0.55, 0.95),
-            _ => Color::new(0.6, 0.6, 0.6, 0.95),
-        };
+        let color = Self::nest_team_color(nest.team);
 
         // Six-point asterisk aligned with the hex grid
         for i in 0..6 {
