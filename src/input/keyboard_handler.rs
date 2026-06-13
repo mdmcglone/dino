@@ -17,17 +17,17 @@ impl KeyboardHandler {
     }
     
     pub fn handle_input(&self, renderer: &mut HexMapRenderer) -> bool {
-        // Camera panning (inverted to feel natural - arrow keys move the view)
-        if is_key_down(KeyCode::Left) {
+        // Camera panning (inverted to feel natural - arrow keys / WASD move the view)
+        if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
             renderer.pan_camera(self.pan_speed, 0.0);
         }
-        if is_key_down(KeyCode::Right) {
+        if is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) {
             renderer.pan_camera(-self.pan_speed, 0.0);
         }
-        if is_key_down(KeyCode::Up) {
+        if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
             renderer.pan_camera(0.0, self.pan_speed);
         }
-        if is_key_down(KeyCode::Down) {
+        if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
             renderer.pan_camera(0.0, -self.pan_speed);
         }
         

@@ -5,18 +5,22 @@ use crate::maps::{PangaeaMap, Map, TerrainType};
 use crate::rendering::HexMapRenderer;
 use crate::input::{KeyboardHandler, MouseHandler};
 use crate::core::HexCoord;
+use crate::game::Nest;
 use ::rand::prelude::*;
 use std::collections::{HashMap, BinaryHeap, HashSet};
 use std::cmp::Ordering;
 
-// Movement time constant (in seconds) - change this to adjust movement speed
+const MEMBERS_PER_TEAM: usize = 3;
+const MIN_NEST_DISTANCE: i32 = 5;
+const NEST_SPAWN_INTERVAL: f64 = 15.0;
+
 const MOVEMENT_TIME: f64 = 1.0;
 
 // Battle tick interval (in seconds) - time between eliminations in battle
 const BATTLE_TICK: f64 = 2.0;
 
 // Retreat time (in seconds) - minimum time in battle before retreat is allowed
-const RETREAT_TIME: f64 = 10.0;
+const RETREAT_TIME: f64 = 1.0;
 
 // A* pathfinding node
 #[derive(Clone, Eq, PartialEq)]
@@ -148,6 +152,10 @@ impl Player {
         !self.waypoint_queue.is_empty()
     }
     
+    fn peek_next_waypoint(&self) -> Option<HexCoord> {
+        self.waypoint_queue.first().copied()
+    }
+
     fn get_next_waypoint(&mut self) -> Option<HexCoord> {
         if !self.waypoint_queue.is_empty() {
             Some(self.waypoint_queue.remove(0))
@@ -161,6 +169,11 @@ impl Player {
     }
     
     fn clear_waypoints(&mut self) {
+        self.waypoint_queue.clear();
+    }
+
+    fn cancel_pathing(&mut self) {
+        self.movement = None;
         self.waypoint_queue.clear();
     }
     
@@ -189,10 +202,120 @@ pub struct GameState {
     selection_box_current: Option<(f32, f32)>,
     current_team: usize,
     num_teams: usize,
+    nests: Vec<Nest>,
+    next_player_id: usize,
     battle_timers: HashMap<HexCoord, f64>, // Track last elimination time per contested tile
 }
 
 impl GameState {
+    fn is_walkable_land(&self, coord: &HexCoord) -> bool {
+        match self.map.get_tile(coord) {
+            TerrainType::Water | TerrainType::ShallowWater | TerrainType::Mountain => false,
+            _ => true,
+        }
+    }
+
+    fn is_valid_nest_site(&self, position: HexCoord, occupied: &HashSet<HexCoord>) -> bool {
+        if !self.is_walkable_land(&position) || occupied.contains(&position) {
+            return false;
+        }
+
+        let nest = Nest::new(0, position, 0.0);
+        nest.member_spawn_positions().into_iter().all(|coord| {
+            self.is_walkable_land(&coord) && !occupied.contains(&coord)
+        })
+    }
+
+    fn is_far_enough_from_other_nests(&self, position: HexCoord, existing_nests: &[HexCoord]) -> bool {
+        existing_nests
+            .iter()
+            .all(|nest_pos| position.distance(nest_pos) >= MIN_NEST_DISTANCE)
+    }
+
+    fn pick_nest_position(
+        &self,
+        land_tiles: &[HexCoord],
+        occupied: &HashSet<HexCoord>,
+        existing_nests: &[HexCoord],
+        rng: &mut impl Rng,
+    ) -> HexCoord {
+        let valid_sites: Vec<HexCoord> = land_tiles
+            .iter()
+            .copied()
+            .filter(|coord| {
+                self.is_valid_nest_site(*coord, occupied)
+                    && self.is_far_enough_from_other_nests(*coord, existing_nests)
+            })
+            .collect();
+
+        if !valid_sites.is_empty() {
+            valid_sites[rng.gen_range(0..valid_sites.len())]
+        } else if !land_tiles.is_empty() {
+            land_tiles[rng.gen_range(0..land_tiles.len())]
+        } else {
+            HexCoord::new(17, 17)
+        }
+    }
+
+    fn spawn_teams_from_nests(
+        &mut self,
+        land_tiles: &[HexCoord],
+        rng: &mut impl Rng,
+        spawn_time: f64,
+    ) -> (HashMap<usize, Player>, Vec<Nest>) {
+        let mut players = HashMap::new();
+        let mut nests: Vec<Nest> = Vec::new();
+        let mut occupied = HashSet::new();
+
+        for team in 0..self.num_teams {
+            let existing_nest_positions: Vec<HexCoord> =
+                nests.iter().map(|nest| nest.position).collect();
+            let nest_position = self.pick_nest_position(
+                land_tiles,
+                &occupied,
+                &existing_nest_positions,
+                rng,
+            );
+            let nest = Nest::new(team, nest_position, spawn_time);
+            for coord in nest.occupied_tiles() {
+                occupied.insert(coord);
+            }
+            nests.push(nest);
+
+            for spawn_pos in nests.last().unwrap().member_spawn_positions() {
+                let player_id = self.next_player_id;
+                self.next_player_id += 1;
+                players.insert(player_id, Player::new(player_id, team, spawn_pos));
+            }
+        }
+
+        (players, nests)
+    }
+
+    fn update_nest_spawning(&mut self, current_time: f64) {
+        let mut spawns: Vec<(usize, HexCoord)> = Vec::new();
+        let mut spawned_teams: Vec<usize> = Vec::new();
+
+        for nest in &self.nests {
+            if nest.should_spawn(current_time, NEST_SPAWN_INTERVAL) {
+                spawns.push((nest.team, nest.position));
+                spawned_teams.push(nest.team);
+            }
+        }
+
+        for (team, spawn_pos) in spawns {
+            let player_id = self.next_player_id;
+            self.next_player_id += 1;
+            self.players.insert(player_id, Player::new(player_id, team, spawn_pos));
+        }
+
+        for nest in &mut self.nests {
+            if spawned_teams.contains(&nest.team) {
+                nest.mark_spawned(current_time);
+            }
+        }
+    }
+
     /// A* pathfinding algorithm to find the shortest path between two hexes
     fn find_path(&self, start: &HexCoord, goal: &HexCoord, _team: usize) -> Option<Vec<HexCoord>> {
         if start == goal {
@@ -289,47 +412,48 @@ impl GameState {
             .map(|(coord, _)| *coord)
             .collect();
         
-        // Spawn characters for two teams
-        let mut players = HashMap::new();
-        let mut player_id = 0;
-        
-        // Team 0: T-Rex (5 units)
-        for _ in 0..5 {
-            let spawn_pos = if !land_tiles.is_empty() {
-                land_tiles[rng.gen_range(0..land_tiles.len())]
-            } else {
-                HexCoord::new(17, 17)
-            };
-            players.insert(player_id, Player::new(player_id, 0, spawn_pos));
-            player_id += 1;
-        }
-        
-        // Team 1: Bronto (5 units)
-        for _ in 0..5 {
-            let spawn_pos = if !land_tiles.is_empty() {
-            land_tiles[rng.gen_range(0..land_tiles.len())]
-        } else {
-                HexCoord::new(17, 17)
+        // Spawn each team around a randomly chosen nest
+        let num_teams = 2;
+        let mut game_state = Self {
+            map,
+            renderer: HexMapRenderer::new(),
+            keyboard_handler: KeyboardHandler::new(),
+            mouse_handler: MouseHandler::new(),
+            players: HashMap::new(),
+            selected_player_ids: Vec::new(),
+            selection_box_start: None,
+            selection_box_current: None,
+            current_team: 0,
+            num_teams,
+            nests: Vec::new(),
+            next_player_id: 0,
+            battle_timers: HashMap::new(),
         };
-            players.insert(player_id, Player::new(player_id, 1, spawn_pos));
-            player_id += 1;
-        }
-        
+
+        let spawn_time = get_time();
+        let (players, nests) = game_state.spawn_teams_from_nests(&land_tiles, &mut rng, spawn_time);
+        game_state.players = players;
+        game_state.nests = nests;
+
         println!("\nMap generated!");
-        println!("Team 0 (T-Rex): 5 units spawned");
-        println!("Team 1 (Bronto): 5 units spawned");
+        for nest in &game_state.nests {
+            println!(
+                "Team {} nest at ({}, {}) with {} members",
+                nest.team, nest.position.q, nest.position.r, MEMBERS_PER_TEAM
+            );
+        }
         println!("\n=== CONTROLS ===");
         println!("Left-click: Select character(s) / Move selected characters");
         println!("Right-click & drag: Rectangle select multiple characters");
         println!("SHIFT + Click: Queue multiple destinations");
         println!("Q: Reset characters to new positions");
-        println!("W: Cycle between teams (current: Team {})", 0);
+        println!("Space: Cycle between teams (current: Team {})", 0);
         println!("\n=== SPLITTING STACKS ===");
         println!("S: Select half of stack (rounded up)");
         println!("D: Select just one character");
         println!("1-9: Select that many characters");
         println!("\n=== CAMERA ===");
-        println!("Arrow keys: Pan camera");
+        println!("Arrow keys / WASD: Pan camera");
         println!("+/-: Zoom in/out");
         println!("0: Reset zoom");
         println!("\n=== BATTLE ===");
@@ -337,19 +461,7 @@ impl GameState {
         println!("Battle tick: {:.1} second(s) between eliminations", BATTLE_TICK);
         println!("Retreat time: {:.1} second(s) minimum in combat", RETREAT_TIME);
         
-        Self {
-            map,
-            renderer: HexMapRenderer::new(),
-            keyboard_handler: KeyboardHandler::new(),
-            mouse_handler: MouseHandler::new(),
-            players,
-            selected_player_ids: Vec::new(),
-            selection_box_start: None,
-            selection_box_current: None,
-            current_team: 0,
-            num_teams: 2,
-            battle_timers: HashMap::new(),
-        }
+        game_state
     }
     
     pub async fn load_team_sprite(&mut self, team: usize, path: &str) {
@@ -358,7 +470,8 @@ impl GameState {
     
     /// Add a new player to the game at the specified position
     pub fn add_player(&mut self, team: usize, position: HexCoord) -> usize {
-        let new_id = self.players.len();
+        let new_id = self.next_player_id;
+        self.next_player_id += 1;
         self.players.insert(new_id, Player::new(new_id, team, position));
         new_id
     }
@@ -431,7 +544,7 @@ impl GameState {
         }
     }
     
-    /// Reset all players to new random positions
+    /// Reset all players to new nest positions
     fn reset_players(&mut self) {
         let mut rng = thread_rng();
         let land_tiles: Vec<HexCoord> = self.map.get_tiles()
@@ -443,24 +556,15 @@ impl GameState {
             })
             .map(|(coord, _)| *coord)
             .collect();
-        
-        // Reset each player to a new random position
-        for player in self.players.values_mut() {
-            let new_pos = if !land_tiles.is_empty() {
-                land_tiles[rng.gen_range(0..land_tiles.len())]
-            } else {
-                HexCoord::new(17, 17)
-            };
-            player.position = new_pos;
-            player.selected = false;
-            player.movement = None;
-            player.waypoint_queue.clear();
-            player.combat_entry_time = None;
-        }
-        
+
+        self.next_player_id = 0;
+        let spawn_time = get_time();
+        let (players, nests) = self.spawn_teams_from_nests(&land_tiles, &mut rng, spawn_time);
+        self.players = players;
+        self.nests = nests;
         self.selected_player_ids.clear();
         self.battle_timers.clear();
-        println!("Dinos reset to new positions!");
+        println!("Dinos reset to new nest positions!");
     }
     
     /// Adjust selection to only include N characters from the currently selected group
@@ -495,58 +599,33 @@ impl GameState {
     
     pub fn update(&mut self) -> bool {
         let current_time = get_time();
+
+        self.update_nest_spawning(current_time);
         
-        // Update all players' movements and check for waypoint continuation
+        // Phase 1: advance movement only (battle checks happen before waypoint continuation)
         let player_ids: Vec<usize> = self.players.keys().copied().collect();
-        let mut positions_to_auto_select: Vec<HexCoord> = Vec::new();
+        let mut movement_results: Vec<(usize, bool, HexCoord, bool, usize)> = Vec::new();
         
-        for player_id in player_ids {
-            let (movement_complete, has_waypoint, next_waypoint, player_pos, was_selected, player_team) = {
-                let player = self.players.get_mut(&player_id).unwrap();
-                let complete = player.update_movement(current_time);
-                let waypoint = if complete && player.has_waypoints() {
-                    player.get_next_waypoint()
-                } else {
-                    None
-                };
-                (complete, waypoint.is_some(), waypoint.unwrap_or(HexCoord::new(0, 0)), player.position, player.selected, player.team)
-            };
-            
-            // If a selected player completed movement and landed on a stack, mark for auto-selection
-            if movement_complete && was_selected && !has_waypoint {
-                let players_at_pos = self.get_players_at_tile(&player_pos);
-                if players_at_pos.len() > 1 {
-                    positions_to_auto_select.push(player_pos);
-                }
-            }
-            
-            // If movement completed and there's a next waypoint, calculate path and start movement
-            if movement_complete && has_waypoint {
-                if let Some(path) = self.find_path(&player_pos, &next_waypoint, player_team) {
-                    if let Some(player) = self.players.get_mut(&player_id) {
-                        player.start_path_movement(path, current_time);
-                    }
-                }
-            }
+        for player_id in &player_ids {
+            let player = self.players.get_mut(player_id).unwrap();
+            let complete = player.update_movement(current_time);
+            movement_results.push((
+                *player_id,
+                complete,
+                player.position,
+                player.selected,
+                player.team,
+            ));
         }
         
-        // Auto-select entire stacks where selected characters just landed
-        for pos in positions_to_auto_select {
-            self.select_players_at_tile(&pos);
-        }
-        
-        // Process battles on tiles with multiple teams
-        let all_player_ids: Vec<usize> = self.players.keys().copied().collect();
+        // Phase 2: detect battles and stop all pathing for participants entering combat
         let mut contested_tiles: HashMap<HexCoord, Vec<usize>> = HashMap::new();
-        
-        // Group all players by position
-        for &player_id in &all_player_ids {
+        for &player_id in &player_ids {
             if let Some(player) = self.players.get(&player_id) {
                 contested_tiles.entry(player.position).or_insert_with(Vec::new).push(player.team);
             }
         }
         
-        // Find tiles with multiple teams (battles)
         let mut battles: Vec<HexCoord> = Vec::new();
         for (coord, teams) in &contested_tiles {
             let unique_teams: HashSet<usize> = teams.iter().copied().collect();
@@ -555,24 +634,27 @@ impl GameState {
             }
         }
         
-        // Process battle eliminations
         for battle_coord in &battles {
-            // Initialize timer for new battles
-            if !self.battle_timers.contains_key(battle_coord) {
+            let is_new_battle = !self.battle_timers.contains_key(battle_coord);
+            if is_new_battle {
                 self.battle_timers.insert(*battle_coord, current_time);
-                
-                // Mark all players at this tile as entering combat
-                for player in self.players.values_mut() {
-                    if player.position == *battle_coord && player.combat_entry_time.is_none() {
-                        player.combat_entry_time = Some(current_time);
-                    }
+            }
+            
+            for player in self.players.values_mut() {
+                if player.position != *battle_coord {
+                    continue;
+                }
+                if is_new_battle || player.combat_entry_time.is_none() {
+                    player.cancel_pathing();
+                }
+                if player.combat_entry_time.is_none() {
+                    player.combat_entry_time = Some(current_time);
                 }
             }
             
             let last_tick = self.battle_timers.get(battle_coord).copied().unwrap();
             
             if current_time - last_tick >= BATTLE_TICK {
-                // Time to eliminate one unit from each team
                 let mut teams_at_tile: HashMap<usize, Vec<usize>> = HashMap::new();
                 
                 for (id, player) in &self.players {
@@ -581,29 +663,61 @@ impl GameState {
                     }
                 }
                 
-                // Eliminate one unit from each team with units at this tile
-                for player_ids in teams_at_tile.values() {
-                    if !player_ids.is_empty() {
-                        let to_eliminate = player_ids[0]; // Eliminate first one
+                for player_ids_at_tile in teams_at_tile.values() {
+                    if !player_ids_at_tile.is_empty() {
+                        let to_eliminate = player_ids_at_tile[0];
                         self.players.remove(&to_eliminate);
                         self.selected_player_ids.retain(|&id| id != to_eliminate);
                     }
                 }
                 
-                // Update battle timer for next tick
                 self.battle_timers.insert(*battle_coord, current_time);
             }
         }
         
-        // Clean up battle timers for tiles no longer contested
         let active_battles: HashSet<HexCoord> = battles.into_iter().collect();
         self.battle_timers.retain(|coord, _| active_battles.contains(coord));
         
-        // Clear combat_entry_time for players no longer in combat
         for player in self.players.values_mut() {
             if !active_battles.contains(&player.position) {
                 player.combat_entry_time = None;
             }
+        }
+        
+        // Phase 3: waypoint continuation and auto-select (after combat stops pathing)
+        let mut positions_to_auto_select: Vec<HexCoord> = Vec::new();
+        
+        for (player_id, movement_complete, player_pos, was_selected, player_team) in movement_results {
+            if movement_complete && was_selected {
+                if let Some(player) = self.players.get(&player_id) {
+                    if !player.has_waypoints() {
+                        let players_at_pos = self.get_players_at_tile(&player_pos);
+                        if players_at_pos.len() > 1 {
+                            positions_to_auto_select.push(player_pos);
+                        }
+                    }
+                }
+            }
+            
+            if movement_complete {
+                let (from_pos, next_waypoint) = match self.players.get(&player_id) {
+                    Some(player) => match player.peek_next_waypoint() {
+                        Some(waypoint) => (player.position, waypoint),
+                        None => continue,
+                    },
+                    None => continue,
+                };
+                if let Some(path) = self.find_path(&from_pos, &next_waypoint, player_team) {
+                    if let Some(player) = self.players.get_mut(&player_id) {
+                        player.get_next_waypoint();
+                        player.start_path_movement(path, current_time);
+                    }
+                }
+            }
+        }
+        
+        for pos in positions_to_auto_select {
+            self.select_players_at_tile(&pos);
         }
         
         // Handle selection box (rectangle selection on right-click)
@@ -708,8 +822,8 @@ impl GameState {
             self.reset_players();
         }
         
-        // Handle W key to cycle teams
-        if is_key_pressed(KeyCode::W) {
+        // Handle spacebar to cycle teams
+        if is_key_pressed(KeyCode::Space) {
             self.cycle_team();
         }
         
@@ -772,6 +886,11 @@ impl GameState {
         
         // Draw hex map
         self.renderer.draw_map(&self.map);
+
+        // Draw team nests
+        for nest in &self.nests {
+            self.renderer.draw_nest(nest);
+        }
         
         // Group players by position
         let mut player_positions: HashMap<HexCoord, Vec<&Player>> = HashMap::new();

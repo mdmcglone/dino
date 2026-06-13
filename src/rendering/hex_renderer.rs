@@ -2,6 +2,7 @@
 
 use macroquad::prelude::*;
 use crate::core::HexCoord;
+use crate::game::Nest;
 use crate::maps::{Map, TerrainType};
 use super::overlay_renderer::OverlayRenderer;
 use super::ui_renderer::UIRenderer;
@@ -224,13 +225,7 @@ impl HexMapRenderer {
     }
     
     pub fn draw_ui(&self) {
-        self.ui_renderer.draw(
-            self.zoom_level,
-            self.overlay_renderer.is_visible(),
-            self.overlay_renderer.get_alpha(),
-            self.overlay_renderer.get_offset(),
-            self.overlay_renderer.has_texture(),
-        );
+        self.ui_renderer.draw(self.zoom_level);
     }
     
     pub fn draw_player(&self, coord: &HexCoord, team: usize) {
@@ -428,6 +423,27 @@ impl HexMapRenderer {
         );
     }
     
+    pub fn draw_nest(&self, nest: &Nest) {
+        let (center_x, center_y) = self.hex_to_pixel(&nest.position);
+        let arm_length = self.hex_size * 0.45;
+        let thickness = 3.0 * self.zoom_level;
+        let color = match nest.team {
+            0 => Color::new(0.85, 0.55, 0.1, 0.95),
+            1 => Color::new(0.15, 0.65, 0.55, 0.95),
+            _ => Color::new(0.6, 0.6, 0.6, 0.95),
+        };
+
+        // Six-point asterisk aligned with the hex grid
+        for i in 0..6 {
+            let angle = std::f32::consts::PI / 3.0 * i as f32;
+            let end_x = center_x + arm_length * angle.cos();
+            let end_y = center_y + arm_length * angle.sin();
+            draw_line(center_x, center_y, end_x, end_y, thickness, color);
+        }
+
+        draw_circle(center_x, center_y, 4.0 * self.zoom_level, color);
+    }
+
     pub fn draw_battle_indicator(&self, coord: &HexCoord) {
         let (center_x, center_y) = self.hex_to_pixel(coord);
         
