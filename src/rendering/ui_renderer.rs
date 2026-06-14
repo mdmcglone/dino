@@ -40,7 +40,7 @@ impl UIRenderer {
                 ("SHIFT+CLICK: QUEUE WAYPOINTS", false),
                 ("TEAMS", true),
                 ("SPACE: CYCLE TEAM", false),
-                ("P: PLACE NEST (5+, +5 EACH)", false),
+                ("P: PLACE NEST (1, 5, 10...)", false),
                 ("STACK (WHEN SELECTED)", true),
                 ("E: SELECT HALF", false),
                 ("R: SELECT ONE", false),

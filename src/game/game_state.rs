@@ -11,11 +11,12 @@ use std::collections::{HashMap, BinaryHeap, HashSet};
 use std::cmp::Ordering;
 
 const MEMBERS_PER_TEAM: usize = 3;
+const STARTING_DINOS_PER_TEAM: usize = MEMBERS_PER_TEAM + 1;
 const MIN_NEST_DISTANCE: i32 = 5;
 const BASE_FOOD_CAP: f32 = 100.0;
 const POPULATION_PER_NEST: usize = 20;
 const NEST_SIEGE_ATTACKER_CYCLE_MULTIPLIER: f64 = 1.5;
-const BASE_NEST_CREATION_COST: usize = 5;
+const FIRST_NEST_CREATION_COST: usize = 1;
 const NEST_CREATION_COST_INCREMENT: usize = 5;
 
 const MOVEMENT_TIME: f64 = 1.0;
@@ -469,41 +470,38 @@ impl GameState {
         }
     }
 
-    fn spawn_teams_from_nests(
+    fn spawn_initial_teams(
         &mut self,
         land_tiles: &[HexCoord],
         rng: &mut impl Rng,
-    ) -> (HashMap<usize, Player>, Vec<Nest>) {
+    ) -> (HashMap<usize, Player>, Vec<Nest>, Vec<(usize, HexCoord)>) {
         let mut players = HashMap::new();
-        let mut nests: Vec<Nest> = Vec::new();
         let mut occupied = HashSet::new();
-        let mut claimed = HashSet::new();
+        let mut spawn_centers: Vec<(usize, HexCoord)> = Vec::new();
 
         for team in 0..self.num_teams {
-            let existing_nest_positions: Vec<HexCoord> =
-                nests.iter().map(|nest| nest.position).collect();
-            let nest_position = self.pick_nest_position(
+            let existing: Vec<HexCoord> = spawn_centers.iter().map(|(_, coord)| *coord).collect();
+            let spawn_center = self.pick_nest_position(
                 land_tiles,
                 &occupied,
-                &claimed,
-                &existing_nest_positions,
+                &HashSet::new(),
+                &existing,
                 rng,
             );
-            let nest = Nest::new(team, nest_position, &claimed);
-            claimed.extend(nest.farm_within().iter().copied());
-            for coord in nest.occupied_tiles() {
+            let staging = Nest::new(team, spawn_center, &HashSet::new());
+            for coord in staging.occupied_tiles() {
                 occupied.insert(coord);
             }
-            nests.push(nest);
+            spawn_centers.push((team, spawn_center));
 
-            for spawn_pos in nests.last().unwrap().member_spawn_positions() {
+            for spawn_pos in staging.occupied_tiles() {
                 let player_id = self.next_player_id;
                 self.next_player_id += 1;
                 players.insert(player_id, Player::new(player_id, team, spawn_pos));
             }
         }
 
-        (players, nests)
+        (players, Vec::new(), spawn_centers)
     }
 
     fn is_nest_tile(&self, coord: &HexCoord) -> bool {
@@ -536,7 +534,11 @@ impl GameState {
 
     fn nest_creation_cost(&self, team: usize) -> usize {
         let times_created = self.nest_creations.get(&team).copied().unwrap_or(0);
-        BASE_NEST_CREATION_COST + NEST_CREATION_COST_INCREMENT * times_created
+        if times_created == 0 {
+            FIRST_NEST_CREATION_COST
+        } else {
+            NEST_CREATION_COST_INCREMENT * times_created
+        }
     }
 
     fn try_create_nest(&mut self) {
@@ -624,6 +626,12 @@ impl GameState {
         true
     }
 
+    fn nest_food_economy_active(&self, nest: &Nest, battle_coords: &HashSet<HexCoord>) -> bool {
+        self.can_spawn_dino(nest.team)
+            && !battle_coords.contains(&nest.position)
+            && !nest.has_siege_damage()
+    }
+
     fn update_food_gathering(&mut self, current_time: f64, battle_coords: &HashSet<HexCoord>) {
         if self.last_food_update == 0.0 {
             self.last_food_update = current_time;
@@ -653,7 +661,7 @@ impl GameState {
         let mut food_gains: Vec<(usize, f32)> = Vec::new();
 
         for (index, nest) in self.nests.iter().enumerate() {
-            if !self.can_spawn_dino(nest.team) {
+            if !self.nest_food_economy_active(nest, battle_coords) {
                 continue;
             }
 
@@ -676,26 +684,21 @@ impl GameState {
             self.nests[index].food += gain;
         }
 
-        let teams_at_cap: HashSet<usize> = self
+        let clamp_indices: Vec<usize> = self
             .nests
             .iter()
-            .map(|nest| nest.team)
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .filter(|team| !self.can_spawn_dino(*team))
+            .enumerate()
+            .filter(|(_, nest)| !self.nest_food_economy_active(nest, battle_coords))
+            .map(|(index, _)| index)
             .collect();
 
-        for nest in &mut self.nests {
-            if teams_at_cap.contains(&nest.team) {
-                nest.food = nest.food.min(BASE_FOOD_CAP - 0.01);
-            }
+        for index in clamp_indices {
+            self.nests[index].food = self.nests[index].food.min(BASE_FOOD_CAP - 0.01);
         }
 
         for index in 0..self.nests.len() {
-            if self.nests[index].has_siege_damage() {
-                continue;
-            }
-            if battle_coords.contains(&self.nests[index].position) {
+            let nest = &self.nests[index];
+            if !self.nest_food_economy_active(nest, battle_coords) {
                 continue;
             }
             while self.nests[index].food >= BASE_FOOD_CAP {
@@ -966,22 +969,22 @@ impl GameState {
             nest_creations: HashMap::new(),
         };
 
-        let (players, nests) = game_state.spawn_teams_from_nests(&land_tiles, &mut rng);
+        let (players, nests, spawn_centers) = game_state.spawn_initial_teams(&land_tiles, &mut rng);
         game_state.players = players;
         game_state.nests = nests;
 
         println!("\nMap generated!");
-        for nest in &game_state.nests {
+        for (team, center) in spawn_centers {
             println!(
-                "Team {} nest at ({}, {}) with {} members",
-                nest.team, nest.position.q, nest.position.r, MEMBERS_PER_TEAM
+                "Team {} starts with {} dinos near ({}, {}) — place first nest with P (costs 1)",
+                team, STARTING_DINOS_PER_TEAM, center.q, center.r,
             );
         }
         println!("\n=== CONTROLS ===");
         println!("Left-click: Select character(s) / Move selected characters");
         println!("Right-click & drag: Rectangle select multiple characters");
         println!("SHIFT + Click: Queue multiple destinations");
-        println!("P: Place nest (cost starts at 5, +5 each time)");
+        println!("P: Place nest (costs 1, then 5, 10, 15...)");
         println!("Space: Cycle between teams (current: Team {})", 0);
         println!("\n=== SPLITTING STACKS ===");
         println!("E: Select half of stack (rounded up)");
@@ -1095,7 +1098,7 @@ impl GameState {
         self.next_player_id = 0;
         self.last_food_update = get_time();
         self.last_siege_update = get_time();
-        let (players, nests) = self.spawn_teams_from_nests(&land_tiles, &mut rng);
+        let (players, nests, _spawn_centers) = self.spawn_initial_teams(&land_tiles, &mut rng);
         self.players = players;
         self.nests = nests;
         self.selected_player_ids.clear();
