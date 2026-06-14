@@ -7,10 +7,10 @@ pub enum TerrainType {
     Water,
     ShallowWater,
     Grass,
+    Hills,
     Forest,
     Desert,
     Mountain,
-    Snow,
     Savanna,
     Jungle,
 }
@@ -21,10 +21,10 @@ impl TerrainType {
             TerrainType::Water => Color::new(64.0/255.0, 164.0/255.0, 223.0/255.0, 1.0),
             TerrainType::ShallowWater => Color::new(100.0/255.0, 184.0/255.0, 233.0/255.0, 1.0),
             TerrainType::Grass => Color::new(34.0/255.0, 139.0/255.0, 34.0/255.0, 1.0),
+            TerrainType::Hills => Color::new(154.0/255.0, 170.0/255.0, 62.0/255.0, 1.0),
             TerrainType::Forest => Color::new(34.0/255.0, 85.0/255.0, 34.0/255.0, 1.0),
             TerrainType::Desert => Color::new(238.0/255.0, 203.0/255.0, 173.0/255.0, 1.0),
             TerrainType::Mountain => Color::new(139.0/255.0, 90.0/255.0, 43.0/255.0, 1.0),
-            TerrainType::Snow => Color::new(245.0/255.0, 245.0/255.0, 250.0/255.0, 1.0),
             TerrainType::Savanna => Color::new(189.0/255.0, 183.0/255.0, 107.0/255.0, 1.0),
             TerrainType::Jungle => Color::new(0.0/255.0, 100.0/255.0, 0.0/255.0, 1.0),
         }
@@ -35,10 +35,10 @@ impl TerrainType {
             TerrainType::Water => Color::new(40.0/255.0, 120.0/255.0, 180.0/255.0, 1.0),
             TerrainType::ShallowWater => Color::new(70.0/255.0, 150.0/255.0, 200.0/255.0, 1.0),
             TerrainType::Grass => Color::new(20.0/255.0, 100.0/255.0, 20.0/255.0, 1.0),
+            TerrainType::Hills => Color::new(120.0/255.0, 135.0/255.0, 45.0/255.0, 1.0),
             TerrainType::Forest => Color::new(20.0/255.0, 60.0/255.0, 20.0/255.0, 1.0),
             TerrainType::Desert => Color::new(200.0/255.0, 170.0/255.0, 140.0/255.0, 1.0),
             TerrainType::Mountain => Color::new(100.0/255.0, 60.0/255.0, 30.0/255.0, 1.0),
-            TerrainType::Snow => Color::new(200.0/255.0, 200.0/255.0, 210.0/255.0, 1.0),
             TerrainType::Savanna => Color::new(150.0/255.0, 145.0/255.0, 80.0/255.0, 1.0),
             TerrainType::Jungle => Color::new(0.0/255.0, 70.0/255.0, 0.0/255.0, 1.0),
         }
@@ -48,9 +48,9 @@ impl TerrainType {
         match self {
             TerrainType::Jungle => 3.0,
             TerrainType::Forest => 2.0,
-            TerrainType::Grass => 1.0,
+            TerrainType::Grass | TerrainType::Hills => 1.0,
             TerrainType::Savanna | TerrainType::ShallowWater => 0.5,
-            TerrainType::Desert | TerrainType::Mountain | TerrainType::Water | TerrainType::Snow => 0.0,
+            TerrainType::Desert | TerrainType::Mountain | TerrainType::Water => 0.0,
         }
     }
 } 

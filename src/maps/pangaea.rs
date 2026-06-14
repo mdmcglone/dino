@@ -40,10 +40,10 @@ impl PangaeaMap {
         // Generate features
         self.create_pangaea_shape();
         self.add_mountain_ranges();
+        self.add_hills();
         self.add_deserts();
         self.add_forests_and_jungles();
         self.add_coastal_features();
-        self.add_terrain_variation();
     }
     
     fn create_pangaea_shape(&mut self) {
@@ -156,6 +156,29 @@ impl PangaeaMap {
         }
     }
     
+    fn add_hills(&mut self) {
+        let mut rng = thread_rng();
+        let coords: Vec<_> = self.tiles.keys().cloned().collect();
+
+        for coord in coords {
+            if self.get_tile(&coord) != TerrainType::Grass {
+                continue;
+            }
+
+            let near_mountain = coord.neighbors().iter().any(|neighbor| {
+                neighbor.q >= 0
+                    && neighbor.q < self.width
+                    && neighbor.r >= 0
+                    && neighbor.r < self.height
+                    && self.get_tile(neighbor) == TerrainType::Mountain
+            });
+
+            if near_mountain && rng.gen::<f32>() < 0.55 {
+                self.tiles.insert(coord, TerrainType::Hills);
+            }
+        }
+    }
+
     fn add_deserts(&mut self) {
         let mut rng = thread_rng();
         let coords: Vec<_> = self.tiles.keys().cloned().collect();
@@ -217,28 +240,6 @@ impl PangaeaMap {
                 }
                 if has_land_neighbor {
                     self.tiles.insert(coord, TerrainType::ShallowWater);
-                }
-            }
-        }
-    }
-    
-    fn add_terrain_variation(&mut self) {
-        let mut rng = thread_rng();
-        let coords: Vec<_> = self.tiles.keys().cloned().collect();
-        
-        for coord in coords {
-            if self.get_tile(&coord) == TerrainType::Mountain {
-                let mut mountain_neighbors = 0;
-                for neighbor in coord.neighbors() {
-                    if neighbor.q >= 0 && neighbor.q < self.width &&
-                       neighbor.r >= 0 && neighbor.r < self.height &&
-                       self.get_tile(&neighbor) == TerrainType::Mountain {
-                        mountain_neighbors += 1;
-                    }
-                }
-                
-                if mountain_neighbors >= 4 && rng.gen::<f32>() < 0.3 {
-                    self.tiles.insert(coord, TerrainType::Snow);
                 }
             }
         }

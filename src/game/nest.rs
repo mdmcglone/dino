@@ -3,12 +3,15 @@ use std::collections::HashSet;
 use crate::core::{HexCoord, OffsetFarmZone};
 
 pub const NEST_FARM_RADIUS: i32 = 2;
+pub const SIEGE_DINO_SECONDS_TARGET: f32 = 300.0;
 
 #[derive(Debug, Clone)]
 pub struct Nest {
     pub team: usize,
     pub position: HexCoord,
     pub food: f32,
+    pub siege_progress: f32,
+    pub siege_team: Option<usize>,
     farm_within: HashSet<HexCoord>,
 }
 
@@ -23,8 +26,23 @@ impl Nest {
             team,
             position,
             food: 0.0,
+            siege_progress: 0.0,
+            siege_team: None,
             farm_within,
         }
+    }
+
+    pub fn set_farm_within(&mut self, farm_within: HashSet<HexCoord>) {
+        self.farm_within = farm_within;
+    }
+
+    pub fn has_siege_damage(&self) -> bool {
+        self.siege_progress > 0.0
+    }
+
+    pub fn reset_siege(&mut self) {
+        self.siege_progress = 0.0;
+        self.siege_team = None;
     }
 
     pub fn is_in_farm_range(&self, coord: &HexCoord) -> bool {

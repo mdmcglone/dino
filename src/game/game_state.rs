@@ -4,8 +4,8 @@ use macroquad::prelude::*;
 use crate::maps::{PangaeaMap, Map, TerrainType};
 use crate::rendering::HexMapRenderer;
 use crate::input::{KeyboardHandler, MouseHandler};
-use crate::core::HexCoord;
-use crate::game::Nest;
+use crate::game::{Nest, nest::{NEST_FARM_RADIUS, SIEGE_DINO_SECONDS_TARGET}};
+use crate::core::{HexCoord, OffsetFarmZone};
 use ::rand::prelude::*;
 use std::collections::{HashMap, BinaryHeap, HashSet};
 use std::cmp::Ordering;
@@ -13,15 +13,16 @@ use std::cmp::Ordering;
 const MEMBERS_PER_TEAM: usize = 3;
 const MIN_NEST_DISTANCE: i32 = 5;
 const BASE_FOOD_CAP: f32 = 100.0;
-const NEST_CREATION_DINO_COST: usize = 10;
-const MIN_SELECTED_FOR_NEST: usize = 10;
-const MIN_TEAM_DINOS_FOR_NEST: usize = 11;
+const POPULATION_PER_NEST: usize = 20;
+const NEST_SIEGE_ATTACKER_CYCLE_MULTIPLIER: f64 = 1.5;
+const BASE_NEST_CREATION_COST: usize = 5;
+const NEST_CREATION_COST_INCREMENT: usize = 5;
 
 const MOVEMENT_TIME: f64 = 1.0;
 
 // Base combat cycle (in seconds) — modifiers adjust each team's effective rate
 const BASE_BATTLE_CYCLE: f64 = 2.0;
-const ADVANTAGE_CYCLE_REDUCTION: f64 = 0.10;
+const ADVANTAGE_CYCLE_REDUCTION: f64 = 0.05;
 const MIN_CYCLE_MULTIPLIER: f64 = 0.1;
 
 // Retreat time (in seconds) - minimum time in battle before retreat is allowed
@@ -244,7 +245,10 @@ pub struct GameState {
     nests: Vec<Nest>,
     next_player_id: usize,
     last_food_update: f64,
+    last_siege_update: f64,
     battle_states: HashMap<HexCoord, HashMap<usize, BattleTeamTimer>>,
+    show_controls: bool,
+    nest_creations: HashMap<usize, usize>,
 }
 
 impl GameState {
@@ -252,6 +256,152 @@ impl GameState {
         match self.map.get_tile(coord) {
             TerrainType::Water | TerrainType::ShallowWater | TerrainType::Mountain => false,
             _ => true,
+        }
+    }
+
+    fn claimed_territory_except(&self, exclude_index: usize) -> HashSet<HexCoord> {
+        self.nests
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != exclude_index)
+            .flat_map(|(_, nest)| nest.farm_within().iter().copied())
+            .collect()
+    }
+
+    fn nest_index_at(&self, coord: &HexCoord) -> Option<usize> {
+        self.nests.iter().position(|nest| nest.position == *coord)
+    }
+
+    fn apply_nest_siege_combat_penalty(&self, cycle: f64, battle_coord: HexCoord, team: usize) -> f64 {
+        if let Some(index) = self.nest_index_at(&battle_coord) {
+            if self.nests[index].team != team {
+                return cycle * NEST_SIEGE_ATTACKER_CYCLE_MULTIPLIER;
+            }
+        }
+        cycle
+    }
+
+    fn capture_nest(&mut self, nest_index: usize, new_team: usize) {
+        let position = self.nests[nest_index].position;
+        let claimed = self.claimed_territory_except(nest_index);
+        let farm_within = OffsetFarmZone::compute_claimed(&position, NEST_FARM_RADIUS, &claimed);
+        let nest = &mut self.nests[nest_index];
+        let old_team = nest.team;
+        nest.team = new_team;
+        nest.set_farm_within(farm_within);
+        nest.food = 0.0;
+        nest.reset_siege();
+        println!(
+            "Team {} captured nest at ({}, {}) from team {}",
+            new_team, position.q, position.r, old_team
+        );
+    }
+
+    fn visible_tiles_for_team(&self, team: usize) -> HashSet<HexCoord> {
+        let mut visible = HashSet::new();
+
+        for nest in self.nests.iter().filter(|nest| nest.team == team) {
+            visible.extend(nest.farm_within().iter().copied());
+        }
+
+        let territory_adjacent: Vec<HexCoord> = visible
+            .iter()
+            .flat_map(|coord| coord.offset_neighbors())
+            .collect();
+        visible.extend(territory_adjacent);
+
+        for player in self.players.values().filter(|player| player.team == team) {
+            visible.insert(player.position);
+            visible.extend(player.position.offset_neighbors());
+        }
+
+        visible
+    }
+
+    fn battle_coords(&self) -> HashSet<HexCoord> {
+        let mut teams_at: HashMap<HexCoord, HashSet<usize>> = HashMap::new();
+        for player in self.players.values() {
+            teams_at.entry(player.position).or_default().insert(player.team);
+        }
+        teams_at
+            .into_iter()
+            .filter(|(_, teams)| teams.len() > 1)
+            .map(|(coord, _)| coord)
+            .collect()
+    }
+
+    fn update_sieges(&mut self, current_time: f64, battle_coords: &HashSet<HexCoord>) {
+        if self.last_siege_update == 0.0 {
+            self.last_siege_update = current_time;
+            return;
+        }
+
+        let dt = current_time - self.last_siege_update;
+        self.last_siege_update = current_time;
+        if dt <= 0.0 {
+            return;
+        }
+
+        let nest_positions: Vec<(usize, HexCoord, usize)> = self
+            .nests
+            .iter()
+            .enumerate()
+            .map(|(index, nest)| (index, nest.position, nest.team))
+            .collect();
+
+        let mut captures: Vec<(usize, usize)> = Vec::new();
+
+        for (nest_index, nest_position, nest_team) in nest_positions {
+            if battle_coords.contains(&nest_position) {
+                continue;
+            }
+
+            let mut team_counts: HashMap<usize, usize> = HashMap::new();
+            for player in self.players.values() {
+                if player.position != nest_position || !player.is_stationary() {
+                    continue;
+                }
+                *team_counts.entry(player.team).or_insert(0) += 1;
+            }
+
+            let defender_count = team_counts.get(&nest_team).copied().unwrap_or(0);
+            let (attacker_team, attacker_count) = team_counts
+                .iter()
+                .filter(|(&team, _)| team != nest_team)
+                .max_by_key(|(_, count)| *count)
+                .map(|(&team, &count)| (team, count))
+                .unwrap_or((nest_team, 0));
+
+            let mut delta = 0.0f32;
+            if attacker_count > 0 {
+                delta += attacker_count as f32 * dt as f32;
+            }
+            if defender_count > 0 {
+                delta -= defender_count as f32 * dt as f32;
+            }
+
+            if delta == 0.0 {
+                continue;
+            }
+
+            let nest = &mut self.nests[nest_index];
+            if attacker_count > 0 {
+                nest.siege_team = Some(attacker_team);
+            }
+
+            nest.siege_progress = (nest.siege_progress + delta).max(0.0);
+
+            if nest.siege_progress <= 0.0 {
+                nest.reset_siege();
+            } else if nest.siege_progress >= SIEGE_DINO_SECONDS_TARGET {
+                if let Some(capturing_team) = nest.siege_team {
+                    captures.push((nest_index, capturing_team));
+                }
+            }
+        }
+
+        for (nest_index, new_team) in captures {
+            self.capture_nest(nest_index, new_team);
         }
     }
 
@@ -384,14 +534,21 @@ impl GameState {
         }
     }
 
+    fn nest_creation_cost(&self, team: usize) -> usize {
+        let times_created = self.nest_creations.get(&team).copied().unwrap_or(0);
+        BASE_NEST_CREATION_COST + NEST_CREATION_COST_INCREMENT * times_created
+    }
+
     fn try_create_nest(&mut self) {
-        if self.selected_player_ids.len() < MIN_SELECTED_FOR_NEST {
+        let team = self.current_team;
+        let cost = self.nest_creation_cost(team);
+
+        if self.selected_player_ids.len() < cost {
             return;
         }
 
-        let team = self.current_team;
-        let team_dino_count = self.players.values().filter(|player| player.team == team).count();
-        if team_dino_count < MIN_TEAM_DINOS_FOR_NEST {
+        let team_dino_count = self.team_dino_count(team);
+        if team_dino_count <= cost {
             return;
         }
 
@@ -419,7 +576,7 @@ impl GameState {
         let to_remove: Vec<usize> = self
             .selected_player_ids
             .iter()
-            .take(NEST_CREATION_DINO_COST)
+            .take(cost)
             .copied()
             .collect();
         for id in &to_remove {
@@ -427,6 +584,7 @@ impl GameState {
         }
 
         self.nests.push(preview);
+        *self.nest_creations.entry(team).or_insert(0) += 1;
         self.selected_player_ids.retain(|id| self.players.contains_key(id));
         for id in &self.selected_player_ids {
             if let Some(player) = self.players.get_mut(id) {
@@ -435,18 +593,38 @@ impl GameState {
         }
 
         println!(
-            "Team {} nest established at ({}, {})",
-            team, position.q, position.r,
+            "Team {} nest established at ({}, {}) — next nest costs {} dinos",
+            team, position.q, position.r, self.nest_creation_cost(team),
         );
     }
 
-    fn spawn_dino_at(&mut self, team: usize, position: HexCoord) {
+    fn team_dino_count(&self, team: usize) -> usize {
+        self.players.values().filter(|player| player.team == team).count()
+    }
+
+    fn team_nest_count(&self, team: usize) -> usize {
+        self.nests.iter().filter(|nest| nest.team == team).count()
+    }
+
+    fn team_population_cap(&self, team: usize) -> usize {
+        self.team_nest_count(team) * POPULATION_PER_NEST
+    }
+
+    fn can_spawn_dino(&self, team: usize) -> bool {
+        self.team_dino_count(team) < self.team_population_cap(team)
+    }
+
+    fn spawn_dino_at(&mut self, team: usize, position: HexCoord) -> bool {
+        if !self.can_spawn_dino(team) {
+            return false;
+        }
         let player_id = self.next_player_id;
         self.next_player_id += 1;
         self.players.insert(player_id, Player::new(player_id, team, position));
+        true
     }
 
-    fn update_food_gathering(&mut self, current_time: f64) {
+    fn update_food_gathering(&mut self, current_time: f64, battle_coords: &HashSet<HexCoord>) {
         if self.last_food_update == 0.0 {
             self.last_food_update = current_time;
             return;
@@ -475,6 +653,10 @@ impl GameState {
         let mut food_gains: Vec<(usize, f32)> = Vec::new();
 
         for (index, nest) in self.nests.iter().enumerate() {
+            if !self.can_spawn_dino(nest.team) {
+                continue;
+            }
+
             let Some(tiles) = gathering_tiles.get(&nest.team) else {
                 continue;
             };
@@ -490,20 +672,41 @@ impl GameState {
             }
         }
 
-        let mut spawns: Vec<(usize, HexCoord)> = Vec::new();
-
         for (index, gain) in food_gains {
-            let nest = &mut self.nests[index];
-            nest.food += gain;
+            self.nests[index].food += gain;
+        }
 
-            while nest.food >= BASE_FOOD_CAP {
-                nest.food -= BASE_FOOD_CAP;
-                spawns.push((nest.team, nest.position));
+        let teams_at_cap: HashSet<usize> = self
+            .nests
+            .iter()
+            .map(|nest| nest.team)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .filter(|team| !self.can_spawn_dino(*team))
+            .collect();
+
+        for nest in &mut self.nests {
+            if teams_at_cap.contains(&nest.team) {
+                nest.food = nest.food.min(BASE_FOOD_CAP - 0.01);
             }
         }
 
-        for (team, position) in spawns {
-            self.spawn_dino_at(team, position);
+        for index in 0..self.nests.len() {
+            if self.nests[index].has_siege_damage() {
+                continue;
+            }
+            if battle_coords.contains(&self.nests[index].position) {
+                continue;
+            }
+            while self.nests[index].food >= BASE_FOOD_CAP {
+                let team = self.nests[index].team;
+                let position = self.nests[index].position;
+                if !self.can_spawn_dino(team) {
+                    break;
+                }
+                self.nests[index].food -= BASE_FOOD_CAP;
+                self.spawn_dino_at(team, position);
+            }
         }
     }
 
@@ -542,11 +745,13 @@ impl GameState {
         &self,
         team_counts: &HashMap<usize, usize>,
         team: usize,
+        battle_coord: HexCoord,
         current_time: f64,
     ) -> BattleTeamTimer {
         let team_count = team_counts.get(&team).copied().unwrap_or(0);
         let enemy_count = Self::primary_enemy_count(team_counts, team);
         let cycle = compute_combat_cycle(BASE_BATTLE_CYCLE, team_count, enemy_count);
+        let cycle = self.apply_nest_siege_combat_penalty(cycle, battle_coord, team);
         BattleTeamTimer::new(current_time, cycle)
     }
 
@@ -557,7 +762,7 @@ impl GameState {
         if is_new {
             let team_timers = team_counts
                 .keys()
-                .map(|&team| (team, self.init_battle_team_timer(&team_counts, team, current_time)))
+                .map(|&team| (team, self.init_battle_team_timer(&team_counts, team, battle_coord, current_time)))
                 .collect();
             self.battle_states.insert(battle_coord, team_timers);
             return;
@@ -572,7 +777,7 @@ impl GameState {
                     .map(|state| !state.contains_key(&team))
                     .unwrap_or(false)
             })
-            .map(|team| (team, self.init_battle_team_timer(&team_counts, team, current_time)))
+            .map(|team| (team, self.init_battle_team_timer(&team_counts, team, battle_coord, current_time)))
             .collect();
 
         let state = self.battle_states.get_mut(&battle_coord).unwrap();
@@ -625,6 +830,7 @@ impl GameState {
                 let team_count = updated_counts.get(&killer_team).copied().unwrap_or(0);
                 let enemy_count = Self::primary_enemy_count(&updated_counts, killer_team);
                 let next_cycle = compute_combat_cycle(BASE_BATTLE_CYCLE, team_count, enemy_count);
+                let next_cycle = self.apply_nest_siege_combat_penalty(next_cycle, *battle_coord, killer_team);
 
                 if let Some(timer) = self.battle_states.get_mut(battle_coord).and_then(|s| s.get_mut(&killer_team)) {
                     timer.start_next_cycle(current_time, next_cycle);
@@ -754,7 +960,10 @@ impl GameState {
             nests: Vec::new(),
             next_player_id: 0,
             last_food_update: 0.0,
+            last_siege_update: 0.0,
             battle_states: HashMap::new(),
+            show_controls: true,
+            nest_creations: HashMap::new(),
         };
 
         let (players, nests) = game_state.spawn_teams_from_nests(&land_tiles, &mut rng);
@@ -772,7 +981,7 @@ impl GameState {
         println!("Left-click: Select character(s) / Move selected characters");
         println!("Right-click & drag: Rectangle select multiple characters");
         println!("SHIFT + Click: Queue multiple destinations");
-        println!("P: Place nest (10+ selected, 11+ team dinos)");
+        println!("P: Place nest (cost starts at 5, +5 each time)");
         println!("Space: Cycle between teams (current: Team {})", 0);
         println!("\n=== SPLITTING STACKS ===");
         println!("E: Select half of stack (rounded up)");
@@ -885,11 +1094,13 @@ impl GameState {
 
         self.next_player_id = 0;
         self.last_food_update = get_time();
+        self.last_siege_update = get_time();
         let (players, nests) = self.spawn_teams_from_nests(&land_tiles, &mut rng);
         self.players = players;
         self.nests = nests;
         self.selected_player_ids.clear();
         self.battle_states.clear();
+        self.nest_creations.clear();
         println!("Dinos reset to new nest positions!");
     }
     
@@ -925,8 +1136,10 @@ impl GameState {
     
     pub fn update(&mut self) -> bool {
         let current_time = get_time();
+        let battle_coords = self.battle_coords();
 
-        self.update_food_gathering(current_time);
+        self.update_food_gathering(current_time, &battle_coords);
+        self.update_sieges(current_time, &battle_coords);
         
         // Phase 1: advance movement only (battle checks happen before waypoint continuation)
         let player_ids: Vec<usize> = self.players.keys().copied().collect();
@@ -1104,6 +1317,10 @@ impl GameState {
         if is_key_pressed(KeyCode::Q) {
             self.reset_players();
         }
+
+        if is_key_pressed(KeyCode::Z) {
+            self.show_controls = !self.show_controls;
+        }
         
         // Handle spacebar to cycle teams
         if is_key_pressed(KeyCode::Space) {
@@ -1160,6 +1377,7 @@ impl GameState {
     
     pub fn draw(&self) {
         let current_time = get_time();
+        let visible = self.visible_tiles_for_team(self.current_team);
         
         // Clear screen with light blue-gray background
         clear_background(Color::new(0.85, 0.85, 0.9, 1.0));
@@ -1167,16 +1385,23 @@ impl GameState {
         // Draw grid effect
         self.renderer.draw_grid_effect();
         
-        // Draw hex map
-        self.renderer.draw_map(&self.map);
+        // Draw hex map with fog of war
+        self.renderer.draw_map_with_fog(&self.map, &visible);
 
         // Draw nest farm zones, nests, and food bars
         for nest in &self.nests {
-            self.renderer.draw_nest_farm_zone(nest);
+            self.renderer.draw_nest_farm_zone(nest, &visible);
         }
         for nest in &self.nests {
+            if !visible.contains(&nest.position) {
+                continue;
+            }
             self.renderer.draw_nest(nest);
-            self.renderer.draw_nest_food_bar(nest, BASE_FOOD_CAP);
+            if nest.has_siege_damage() {
+                self.renderer.draw_nest_siege_bar(nest);
+            } else {
+                self.renderer.draw_nest_food_bar(nest, BASE_FOOD_CAP);
+            }
         }
         
         // Group players by position
@@ -1187,6 +1412,9 @@ impl GameState {
         
         // Draw players (grouped by team per position for battles)
         for (position, players_at_pos) in &player_positions {
+            if !visible.contains(position) {
+                continue;
+            }
             // Group players by team at this position
             let mut teams_at_pos: HashMap<usize, Vec<&Player>> = HashMap::new();
             for player in players_at_pos {
@@ -1216,7 +1444,8 @@ impl GameState {
                     0.0
                 };
                 
-                self.renderer.draw_player_with_offset(position, *team_id, offset_factor);
+                let flip_x = is_battle && offset_factor < 0.0;
+                self.renderer.draw_player_with_offset(position, *team_id, offset_factor, flip_x);
                 
                 // Draw count for this team if more than one
                 if team_players.len() > 1 {
@@ -1248,6 +1477,11 @@ impl GameState {
         }
         
         // Draw UI
-        self.renderer.draw_ui();
+        self.renderer.draw_ui(
+            self.show_controls,
+            self.current_team,
+            self.team_dino_count(self.current_team),
+            self.team_population_cap(self.current_team),
+        );
     }
 } 

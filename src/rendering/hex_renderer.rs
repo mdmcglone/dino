@@ -1,6 +1,7 @@
 // Core hex map rendering functionality
 
 use macroquad::prelude::*;
+use std::collections::HashSet;
 use crate::core::HexCoord;
 use crate::game::Nest;
 use crate::maps::{Map, TerrainType};
@@ -196,6 +197,41 @@ impl HexMapRenderer {
         // draw_text(&coord_text, text_x, text_y, text_size, text_color);
     }
     
+    pub fn draw_map_with_fog(&self, map: &dyn Map, visible: &HashSet<HexCoord>) {
+        for (coord, terrain) in map.get_tiles() {
+            self.draw_hex(coord, *terrain);
+            if !visible.contains(coord) {
+                self.draw_hex_fog_overlay(coord);
+            }
+        }
+    }
+
+    fn draw_hex_fog_overlay(&self, coord: &HexCoord) {
+        let (center_x, center_y) = self.hex_to_pixel(coord);
+        if center_x < -self.hex_size * 2.0 || center_x > screen_width() + self.hex_size * 2.0
+            || center_y < -self.hex_size * 2.0 || center_y > screen_height() + self.hex_size * 2.0
+        {
+            return;
+        }
+
+        let fog_color = Color::new(0.45, 0.45, 0.48, 0.55);
+        let mut vertices = [Vec2::ZERO; 6];
+        for i in 0..6 {
+            let angle = std::f32::consts::PI / 3.0 * i as f32;
+            vertices[i] = Vec2::new(
+                center_x + self.hex_size * angle.cos(),
+                center_y + self.hex_size * angle.sin(),
+            );
+        }
+
+        let center = Vec2::new(center_x, center_y);
+        for i in 1..5 {
+            draw_triangle(center, vertices[i], vertices[i + 1], fog_color);
+        }
+        draw_triangle(center, vertices[5], vertices[0], fog_color);
+        draw_triangle(center, vertices[0], vertices[1], fog_color);
+    }
+
     pub fn draw_map(&self, map: &dyn Map) {
         for (coord, terrain) in map.get_tiles() {
             self.draw_hex(coord, *terrain);
@@ -224,8 +260,8 @@ impl HexMapRenderer {
         self.overlay_renderer.draw(self.hex_size, self.camera_x, self.camera_y);
     }
     
-    pub fn draw_ui(&self) {
-        self.ui_renderer.draw(self.zoom_level);
+    pub fn draw_ui(&self, show_controls: bool, current_team: usize, population: usize, population_cap: usize) {
+        self.ui_renderer.draw(self.zoom_level, show_controls, current_team, population, population_cap);
     }
 
     fn nest_team_color(team: usize) -> Color {
@@ -236,13 +272,16 @@ impl HexMapRenderer {
         }
     }
 
-    pub fn draw_nest_farm_zone(&self, nest: &Nest) {
+    pub fn draw_nest_farm_zone(&self, nest: &Nest, visible: &HashSet<HexCoord>) {
         let team_color = Self::nest_team_color(nest.team);
-        let border_color = Color::new(team_color.r, team_color.g, team_color.b, 0.55);
-        let thickness = 2.5 * self.zoom_level;
+        let border_color = Color::new(team_color.r, team_color.g, team_color.b, 1.0);
+        let thickness = 5.0 * self.zoom_level;
         let farm_within = nest.farm_within();
 
         for coord in nest.farm_within() {
+            if !visible.contains(coord) {
+                continue;
+            }
             let (center_x, center_y) = self.hex_to_pixel(coord);
             if center_x < -self.hex_size * 2.0 || center_x > screen_width() + self.hex_size * 2.0
                 || center_y < -self.hex_size * 2.0 || center_y > screen_height() + self.hex_size * 2.0
@@ -316,11 +355,36 @@ impl HexMapRenderer {
         draw_rectangle_lines(bar_x, bar_y, bar_width, bar_height, 1.5, Color::new(1.0, 1.0, 1.0, 0.85));
     }
     
+    pub fn draw_nest_siege_bar(&self, nest: &Nest) {
+        let (center_x, center_y) = self.hex_to_pixel(&nest.position);
+        if center_x < -self.hex_size * 2.0 || center_x > screen_width() + self.hex_size * 2.0
+            || center_y < -self.hex_size * 2.0 || center_y > screen_height() + self.hex_size * 2.0
+        {
+            return;
+        }
+
+        let bar_width = self.hex_size * 1.4;
+        let bar_height = 7.0 * self.zoom_level;
+        let bar_x = center_x - bar_width / 2.0;
+        let bar_y = center_y + self.hex_size * 0.55;
+        let progress = (nest.siege_progress / crate::game::nest::SIEGE_DINO_SECONDS_TARGET).clamp(0.0, 1.0);
+        let fill_color = nest
+            .siege_team
+            .map(Self::nest_team_color)
+            .unwrap_or(Color::new(0.8, 0.2, 0.2, 0.95));
+
+        draw_rectangle(bar_x, bar_y, bar_width, bar_height, Color::new(0.15, 0.15, 0.15, 0.75));
+        if progress > 0.0 {
+            draw_rectangle(bar_x, bar_y, bar_width * progress, bar_height, fill_color);
+        }
+        draw_rectangle_lines(bar_x, bar_y, bar_width, bar_height, 1.5, Color::new(1.0, 0.85, 0.3, 0.9));
+    }
+
     pub fn draw_player(&self, coord: &HexCoord, team: usize) {
-        self.draw_player_with_offset(coord, team, 0.0);
+        self.draw_player_with_offset(coord, team, 0.0, false);
     }
     
-    pub fn draw_player_with_offset(&self, coord: &HexCoord, team: usize, offset_factor: f32) {
+    pub fn draw_player_with_offset(&self, coord: &HexCoord, team: usize, offset_factor: f32, flip_x: bool) {
         let (center_x, center_y) = self.hex_to_pixel(coord);
         
         // Apply horizontal offset for side-by-side battles (half sprite width from center)
@@ -348,6 +412,7 @@ impl HexMapRenderer {
                 WHITE,
                 DrawTextureParams {
                     dest_size: Some(Vec2::new(sprite_size, sprite_size)),
+                    flip_x,
                     ..Default::default()
                 }
             );

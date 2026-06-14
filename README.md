@@ -204,7 +204,6 @@ pub use island::IslandMap;
 | Forest | Dark Green | (34, 85, 34) |
 | Desert | Sandy | (238, 203, 173) |
 | Mountain | Brown | (139, 90, 43) |
-| Snow | Off White | (245, 245, 250) |
 | Savanna | Yellowish | (189, 183, 107) |
 | Jungle | Deep Green | (0, 100, 0) |
 
@@ -274,3 +273,8 @@ cross build --release --target x86_64-unknown-linux-gnu
 ### Compilation Errors
 - Run `cargo update` to ensure latest compatible versions
 - Check that you have Rust 2021 edition or later 
+
+## Notes
+
+### Good Names for this game
+- Hunter x Gatherer
