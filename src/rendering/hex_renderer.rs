@@ -30,7 +30,7 @@ impl HexMapRenderer {
             base_hex_size: base_size,
             overlay_renderer: OverlayRenderer::new(),
             ui_renderer: UIRenderer::new(),
-            team_sprites: vec![None, None],
+            team_sprites: vec![None; 5],
         }
     }
 
@@ -38,10 +38,11 @@ impl HexMapRenderer {
         match load_texture(path).await {
             Ok(texture) => {
                 texture.set_filter(FilterMode::Nearest); // Crisp pixel art
-                if team < self.team_sprites.len() {
-                    self.team_sprites[team] = Some(texture);
-                    println!("Team {} sprite loaded successfully", team);
+                if team >= self.team_sprites.len() {
+                    self.team_sprites.resize(team + 1, None);
                 }
+                self.team_sprites[team] = Some(texture);
+                println!("Team {} sprite loaded successfully", team);
             }
             Err(e) => {
                 println!("Failed to load team {} sprite: {:?}", team, e);
@@ -82,6 +83,19 @@ impl HexMapRenderer {
         self.zoom_level = 1.0;
         self.hex_size = self.base_hex_size;
     }
+
+    pub fn center_camera_on(&mut self, coord: &HexCoord) {
+        let sqrt3 = 3.0_f32.sqrt();
+        let x = self.hex_size * 3.0 / 2.0 * coord.q as f32;
+        let y_offset = if coord.q % 2 == 1 {
+            self.hex_size * sqrt3 / 2.0
+        } else {
+            0.0
+        };
+        let y = self.hex_size * sqrt3 * coord.r as f32 + y_offset;
+        self.camera_x = x + 100.0 - screen_width() / 2.0;
+        self.camera_y = y + 100.0 - screen_height() / 2.0;
+    }
     
     // Overlay controls delegation
     pub async fn load_overlay(&mut self, path: &str) {
@@ -118,112 +132,73 @@ impl HexMapRenderer {
         
         (x + 100.0 - self.camera_x, y + 100.0 - self.camera_y)
     }
-    
-    pub fn draw_hex(&self, coord: &HexCoord, terrain_type: TerrainType) {
-        let (center_x, center_y) = self.hex_to_pixel(coord);
-        
-        // Skip if off screen with larger margin
-        if center_x < -self.hex_size * 2.0 || center_x > screen_width() + self.hex_size * 2.0 ||
-           center_y < -self.hex_size * 2.0 || center_y > screen_height() + self.hex_size * 2.0 {
-            return;
-        }
-        
-        // Calculate hexagon vertices for flat-top orientation
-        let mut vertices = Vec::new();
-        for i in 0..6 {
-            let angle = std::f32::consts::PI / 3.0 * i as f32; // + std::f32::consts::PI / 6.0; // Rotate 30 degrees for flat-top
-            vertices.push(Vec2::new(
-                center_x + self.hex_size * angle.cos(),
-                center_y + self.hex_size * angle.sin()
-            ));
-        }
-        
-        // Draw filled hexagon using triangle fan
-        let color = terrain_type.color();
-        for i in 1..vertices.len() - 1 {
-            draw_triangle(
-                Vec2::new(center_x, center_y),
-                vertices[i],
-                vertices[i + 1],
-                color
-            );
-        }
-        // Close the hexagon
-        draw_triangle(
-            Vec2::new(center_x, center_y),
-            vertices[vertices.len() - 1],
-            vertices[0],
-            color
-        );
-        draw_triangle(
-            Vec2::new(center_x, center_y),
-            vertices[0],
-            vertices[1],
-            color
-        );
-        
-        // Draw border for better definition
-        let border_color = terrain_type.border_color();
-        for i in 0..vertices.len() {
-            let next = (i + 1) % vertices.len();
-            draw_line(
-                vertices[i].x, vertices[i].y,
-                vertices[next].x, vertices[next].y,
-                1.0,
-                border_color
-            );
-        }
-        
-        // // Draw coordinates on the hex
-        // let coord_text = format!("{},{}", coord.q, coord.r);
-        // let text_size = 12.0 * self.zoom_level;
-        // let text_color = Color::new(0.0, 0.0, 0.0, 0.8); // Black with slight transparency
-        
-        // // Center the text
-        // let text_width = coord_text.len() as f32 * text_size * 0.5;
-        // let text_x = center_x - text_width / 2.0;
-        // let text_y = center_y + text_size / 3.0;
-        
-        // // Draw white background for better readability
-        // draw_rectangle(
-        //     text_x - 2.0,
-        //     text_y - text_size + 2.0,
-        //     text_width + 4.0,
-        //     text_size,
-        //     Color::new(1.0, 1.0, 1.0, 0.7)
-        // );
-        
-        // // Draw the coordinate text
-        // draw_text(&coord_text, text_x, text_y, text_size, text_color);
-    }
-    
-    pub fn draw_map_with_fog(&self, map: &dyn Map, visible: &HashSet<HexCoord>) {
-        for (coord, terrain) in map.get_tiles() {
-            self.draw_hex(coord, *terrain);
-            if !visible.contains(coord) {
-                self.draw_hex_fog_overlay(coord);
-            }
-        }
+
+    fn hex_on_screen(&self, center_x: f32, center_y: f32) -> bool {
+        let margin = self.hex_size * 2.0;
+        center_x >= -margin
+            && center_x <= screen_width() + margin
+            && center_y >= -margin
+            && center_y <= screen_height() + margin
     }
 
-    fn draw_hex_fog_overlay(&self, coord: &HexCoord) {
-        let (center_x, center_y) = self.hex_to_pixel(coord);
-        if center_x < -self.hex_size * 2.0 || center_x > screen_width() + self.hex_size * 2.0
-            || center_y < -self.hex_size * 2.0 || center_y > screen_height() + self.hex_size * 2.0
-        {
-            return;
-        }
-
-        let fog_color = Color::new(0.45, 0.45, 0.48, 0.55);
+    fn hex_vertices(center_x: f32, center_y: f32, hex_size: f32) -> [Vec2; 6] {
         let mut vertices = [Vec2::ZERO; 6];
         for i in 0..6 {
             let angle = std::f32::consts::PI / 3.0 * i as f32;
             vertices[i] = Vec2::new(
-                center_x + self.hex_size * angle.cos(),
-                center_y + self.hex_size * angle.sin(),
+                center_x + hex_size * angle.cos(),
+                center_y + hex_size * angle.sin(),
             );
         }
+        vertices
+    }
+    
+    pub fn draw_hex(&self, coord: &HexCoord, terrain_type: TerrainType) {
+        let (center_x, center_y) = self.hex_to_pixel(coord);
+        if !self.hex_on_screen(center_x, center_y) {
+            return;
+        }
+        self.draw_hex_at(center_x, center_y, terrain_type);
+    }
+    
+    pub fn draw_map_with_fog(&self, map: &dyn Map, visible: &HashSet<HexCoord>) {
+        for (coord, terrain) in map.get_tiles() {
+            let (center_x, center_y) = self.hex_to_pixel(coord);
+            if !self.hex_on_screen(center_x, center_y) {
+                continue;
+            }
+            self.draw_hex_at(center_x, center_y, *terrain);
+            if !visible.contains(coord) {
+                self.draw_hex_fog_overlay_at(center_x, center_y);
+            }
+        }
+    }
 
+    fn draw_hex_at(&self, center_x: f32, center_y: f32, terrain_type: TerrainType) {
+        let vertices = Self::hex_vertices(center_x, center_y, self.hex_size);
+        let center = Vec2::new(center_x, center_y);
+        let color = terrain_type.color();
+        for i in 1..5 {
+            draw_triangle(center, vertices[i], vertices[i + 1], color);
+        }
+        draw_triangle(center, vertices[5], vertices[0], color);
+        draw_triangle(center, vertices[0], vertices[1], color);
+
+        let border_color = terrain_type.border_color();
+        for i in 0..6 {
+            let next = (i + 1) % 6;
+            draw_line(
+                vertices[i].x, vertices[i].y,
+                vertices[next].x, vertices[next].y,
+                1.0,
+                border_color,
+            );
+        }
+    }
+
+    fn draw_hex_fog_overlay_at(&self, center_x: f32, center_y: f32) {
+        let fog_color = Color::new(0.45, 0.45, 0.48, 0.55);
+        let vertices = Self::hex_vertices(center_x, center_y, self.hex_size);
         let center = Vec2::new(center_x, center_y);
         for i in 1..5 {
             draw_triangle(center, vertices[i], vertices[i + 1], fog_color);
@@ -260,14 +235,35 @@ impl HexMapRenderer {
         self.overlay_renderer.draw(self.hex_size, self.camera_x, self.camera_y);
     }
     
-    pub fn draw_ui(&self, show_controls: bool, current_team: usize, population: usize, population_cap: usize) {
-        self.ui_renderer.draw(self.zoom_level, show_controls, current_team, population, population_cap);
+    pub fn draw_ui(
+        &self,
+        show_controls: bool,
+        current_team: usize,
+        population: usize,
+        population_cap: usize,
+        nestless_seconds_left: Option<f64>,
+    ) {
+        self.ui_renderer.draw_ui(
+            self.zoom_level,
+            show_controls,
+            current_team,
+            population,
+            population_cap,
+            nestless_seconds_left,
+        );
+    }
+
+    pub fn draw_game_over(&self, winner: Option<usize>, draw: bool) {
+        self.ui_renderer.draw_game_over(winner, draw);
     }
 
     fn nest_team_color(team: usize) -> Color {
         match team {
-            0 => Color::new(0.85, 0.55, 0.1, 0.95),
-            1 => Color::new(0.15, 0.65, 0.55, 0.95),
+            0 => Color::new(0.85, 0.55, 0.1, 0.95),   // T-Rex — gold
+            1 => Color::new(0.15, 0.65, 0.55, 0.95),  // Bronto — teal
+            2 => Color::new(0.45, 0.55, 0.95, 0.95),  // Ptero — sky blue
+            3 => Color::new(0.75, 0.25, 0.55, 0.95),  // Tricera — rose
+            4 => Color::new(0.35, 0.15, 0.45, 0.95),  // Krono — deep purple
             _ => Color::new(0.6, 0.6, 0.6, 0.95),
         }
     }
@@ -458,21 +454,12 @@ impl HexMapRenderer {
     }    
     pub fn draw_selection_highlight(&self, coord: &HexCoord) {
         let (center_x, center_y) = self.hex_to_pixel(coord);
-        
-        // Calculate hexagon vertices
-        let mut vertices = Vec::new();
-        for i in 0..6 {
-            let angle = std::f32::consts::PI / 3.0 * i as f32;
-            vertices.push(Vec2::new(
-                center_x + self.hex_size * angle.cos(),
-                center_y + self.hex_size * angle.sin()
-            ));
-        }
+        let vertices = Self::hex_vertices(center_x, center_y, self.hex_size);
         
         // Draw thick yellow border for selection
         let highlight_color = Color::new(1.0, 1.0, 0.0, 0.8); // Yellow
-        for i in 0..vertices.len() {
-            let next = (i + 1) % vertices.len();
+        for i in 0..6 {
+            let next = (i + 1) % 6;
             draw_line(
                 vertices[i].x, vertices[i].y,
                 vertices[next].x, vertices[next].y,
@@ -482,62 +469,174 @@ impl HexMapRenderer {
         }
     }
     
-    pub fn draw_movement_arrow(&self, from: &HexCoord, to: &HexCoord, progress: f32) {
+    fn draw_dashed_segment(&self, x1: f32, y1: f32, x2: f32, y2: f32, color: Color) {
+        let dx = x2 - x1;
+        let dy = y2 - y1;
+        let length = (dx * dx + dy * dy).sqrt();
+        if length < 1.0 {
+            return;
+        }
+        let dir_x = dx / length;
+        let dir_y = dy / length;
+        let z = self.zoom_level;
+        let dash = 7.0 * z;
+        let gap = 5.0 * z;
+        let mut dist = 0.0;
+        while dist < length {
+            let seg_start = dist;
+            let seg_end = (dist + dash).min(length);
+            draw_line(
+                x1 + dir_x * seg_start,
+                y1 + dir_y * seg_start,
+                x1 + dir_x * seg_end,
+                y1 + dir_y * seg_end,
+                2.0 * z,
+                color,
+            );
+            dist += dash + gap;
+        }
+    }
+
+    fn draw_path_node(&self, coord: &HexCoord, is_final: bool) {
+        let (x, y) = self.hex_to_pixel(coord);
+        let z = self.zoom_level;
+        let dest_ring = Color::new(0.25, 0.62, 0.98, 0.75);
+        let dot_color = Color::new(0.35, 0.78, 1.0, 0.55);
+
+        if is_final {
+            let dest_radius = self.hex_size * 0.2;
+            draw_circle(x, y, dest_radius + 2.0 * z, Color::new(0.2, 0.55, 0.95, 0.18));
+            draw_circle_lines(x, y, dest_radius, 2.0 * z, dest_ring);
+            draw_circle(x, y, 3.5 * z, dot_color);
+        } else {
+            draw_circle(x, y, 5.0 * z, Color::new(0.35, 0.78, 1.0, 0.18));
+            draw_circle(x, y, 3.0 * z, dot_color);
+        }
+    }
+
+    fn draw_active_leg(&self, from: &HexCoord, to: &HexCoord, progress: f32) {
         let (from_x, from_y) = self.hex_to_pixel(from);
         let (to_x, to_y) = self.hex_to_pixel(to);
-        
-        // Calculate arrow direction and length
+
         let dx = to_x - from_x;
         let dy = to_y - from_y;
         let total_length = (dx * dx + dy * dy).sqrt();
-        
-        // Normalize direction
+        if total_length < 1.0 {
+            return;
+        }
+
         let dir_x = dx / total_length;
         let dir_y = dy / total_length;
-        
-        // Calculate the current end point based on progress
-        let current_length = total_length * progress;
-        let end_x = from_x + dir_x * current_length;
-        let end_y = from_y + dir_y * current_length;
-        
-        // Draw the main arrow shaft
-        let arrow_color = Color::new(0.2, 0.6, 1.0, 0.9); // Bright blue
-        let shaft_thickness = 4.0 * self.zoom_level;
-        draw_line(from_x, from_y, end_x, end_y, shaft_thickness, arrow_color);
-        
-        // Draw arrowhead if we're past 20% progress
-        if progress > 0.2 {
-            let arrowhead_size = 12.0 * self.zoom_level;
-            
-            // Calculate perpendicular vector
-            let perp_x = -dir_y;
-            let perp_y = dir_x;
-            
-            // Arrowhead points
-            let head_back = arrowhead_size * 0.8;
-            let head_base_x = end_x - dir_x * head_back;
-            let head_base_y = end_y - dir_y * head_back;
-            
-            let wing_offset = arrowhead_size * 0.5;
-            let left_x = head_base_x + perp_x * wing_offset;
-            let left_y = head_base_y + perp_y * wing_offset;
-            let right_x = head_base_x - perp_x * wing_offset;
-            let right_y = head_base_y - perp_y * wing_offset;
-            
-            // Draw filled arrowhead triangle
-            draw_triangle(
-                Vec2::new(end_x, end_y),
-                Vec2::new(left_x, left_y),
-                Vec2::new(right_x, right_y),
-                arrow_color
+        let perp_x = -dir_y;
+        let perp_y = dir_x;
+        let z = self.zoom_level;
+
+        let end_x = from_x + dir_x * total_length * progress;
+        let end_y = from_y + dir_y * total_length * progress;
+
+        let outline = Color::new(0.06, 0.14, 0.28, 0.9);
+        let shaft_color = Color::new(0.28, 0.72, 1.0, 0.92);
+        let highlight = Color::new(0.82, 0.96, 1.0, 0.85);
+        let ghost = Color::new(0.45, 0.78, 1.0, 0.32);
+
+        let traveled = total_length * progress;
+        let dash = 7.0 * z;
+        let gap = 5.0 * z;
+        let mut dist = traveled;
+        while dist < total_length {
+            let seg_start = dist;
+            let seg_end = (dist + dash).min(total_length);
+            draw_line(
+                from_x + dir_x * seg_start,
+                from_y + dir_y * seg_start,
+                from_x + dir_x * seg_end,
+                from_y + dir_y * seg_end,
+                2.0 * z,
+                ghost,
+            );
+            dist += dash + gap;
+        }
+
+        if progress < 0.02 {
+            return;
+        }
+
+        let head_len = 13.0 * z;
+        let show_head = progress > 0.1;
+        let (shaft_end_x, shaft_end_y) = if show_head {
+            (end_x - dir_x * head_len, end_y - dir_y * head_len)
+        } else {
+            (end_x, end_y)
+        };
+
+        let shaft = 4.5 * z;
+        draw_line(from_x, from_y, shaft_end_x, shaft_end_y, shaft + 2.0 * z, outline);
+        draw_line(from_x, from_y, shaft_end_x, shaft_end_y, shaft, shaft_color);
+        let stripe_off = 0.85 * z;
+        draw_line(
+            from_x + perp_x * stripe_off,
+            from_y + perp_y * stripe_off,
+            shaft_end_x + perp_x * stripe_off,
+            shaft_end_y + perp_y * stripe_off,
+            1.6 * z,
+            highlight,
+        );
+
+        if show_head {
+            let head_width = 6.5 * z;
+            let base_x = shaft_end_x;
+            let base_y = shaft_end_y;
+            let tip = Vec2::new(end_x, end_y);
+            let left = Vec2::new(base_x + perp_x * head_width, base_y + perp_y * head_width);
+            let right = Vec2::new(base_x - perp_x * head_width, base_y - perp_y * head_width);
+            let outline_tip = Vec2::new(end_x + dir_x * z, end_y + dir_y * z);
+            let outline_base_x = base_x - dir_x * z;
+            let outline_base_y = base_y - dir_y * z;
+            let outline_left = Vec2::new(
+                outline_base_x + perp_x * (head_width + z),
+                outline_base_y + perp_y * (head_width + z),
+            );
+            let outline_right = Vec2::new(
+                outline_base_x - perp_x * (head_width + z),
+                outline_base_y - perp_y * (head_width + z),
+            );
+
+            draw_triangle(outline_tip, outline_left, outline_right, outline);
+            draw_triangle(tip, left, right, shaft_color);
+            draw_line(
+                base_x + perp_x * head_width * 0.35,
+                base_y + perp_y * head_width * 0.35,
+                end_x,
+                end_y,
+                1.2 * z,
+                highlight,
             );
         }
-        
-        // Draw a glowing circle at the current position
-        let glow_radius = 6.0 * self.zoom_level;
-        draw_circle(end_x, end_y, glow_radius, Color::new(1.0, 1.0, 1.0, 0.8));
-        draw_circle(end_x, end_y, glow_radius * 0.6, arrow_color);
     }
+
+    pub fn draw_movement_path(&self, route: &[HexCoord], active_progress: Option<f32>) {
+        if route.len() < 2 {
+            return;
+        }
+
+        let ghost = Color::new(0.45, 0.78, 1.0, 0.32);
+        let first_planned = if active_progress.is_some() { 1 } else { 0 };
+
+        for i in first_planned..route.len() - 1 {
+            let (x1, y1) = self.hex_to_pixel(&route[i]);
+            let (x2, y2) = self.hex_to_pixel(&route[i + 1]);
+            self.draw_dashed_segment(x1, y1, x2, y2, ghost);
+        }
+
+        for (index, coord) in route.iter().enumerate().skip(1) {
+            self.draw_path_node(coord, index == route.len() - 1);
+        }
+
+        if let Some(progress) = active_progress {
+            self.draw_active_leg(&route[0], &route[1], progress);
+        }
+    }
+
     
     pub fn draw_stack_count(&self, coord: &HexCoord, count: usize) {
         self.draw_team_stack_count(coord, 0, count, 0.0);

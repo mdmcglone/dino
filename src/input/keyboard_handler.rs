@@ -4,31 +4,37 @@ use macroquad::prelude::*;
 use crate::rendering::HexMapRenderer;
 
 pub struct KeyboardHandler {
+    /// Screen pixels per second when panning with arrow keys / WASD.
     pan_speed: f32,
-    shift_speed: f32,
 }
 
 impl KeyboardHandler {
     pub fn new() -> Self {
         Self {
-            pan_speed: 10.0,
-            shift_speed: 5.0,
+            pan_speed: 600.0,
         }
     }
     
     pub fn handle_input(&self, renderer: &mut HexMapRenderer) -> bool {
+        let dt = get_frame_time();
+        let mut dx = 0.0;
+        let mut dy = 0.0;
+
         // Camera panning (inverted to feel natural - arrow keys / WASD move the view)
         if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
-            renderer.pan_camera(self.pan_speed, 0.0);
+            dx += self.pan_speed * dt;
         }
         if is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) {
-            renderer.pan_camera(-self.pan_speed, 0.0);
+            dx -= self.pan_speed * dt;
         }
         if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
-            renderer.pan_camera(0.0, self.pan_speed);
+            dy += self.pan_speed * dt;
         }
         if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
-            renderer.pan_camera(0.0, -self.pan_speed);
+            dy -= self.pan_speed * dt;
+        }
+        if dx != 0.0 || dy != 0.0 {
+            renderer.pan_camera(dx, dy);
         }
         
         // Zoom controls

@@ -1,6 +1,7 @@
 // UI rendering functionality
 
 use macroquad::prelude::*;
+use crate::game::team_abilities;
 
 pub struct UIRenderer;
 
@@ -9,7 +10,15 @@ impl UIRenderer {
         Self
     }
 
-    pub fn draw(&self, zoom_level: f32, show_controls: bool, current_team: usize, population: usize, population_cap: usize) {
+    pub fn draw_ui(
+        &self,
+        zoom_level: f32,
+        show_controls: bool,
+        current_team: usize,
+        population: usize,
+        population_cap: usize,
+        nestless_seconds_left: Option<f64>,
+    ) {
         let control_color = Color::new(0.2, 0.2, 0.2, 1.0);
         let section_color = Color::new(0.45, 0.45, 0.45, 1.0);
         let control_size = 16.0;
@@ -71,9 +80,63 @@ impl UIRenderer {
         draw_text(&zoom_text, screen_width() - 200.0, 30.0, 20.0, control_color);
 
         let pop_text = format!(
-            "Team {} Population: {}/{}",
-            current_team, population, population_cap
+            "{} Population: {}/{}",
+            team_abilities::team_name(current_team),
+            population,
+            population_cap
         );
         draw_text(&pop_text, screen_width() - 280.0, 55.0, 20.0, control_color);
+
+        if let Some(seconds_left) = nestless_seconds_left {
+            let warning = format!("NO NEST! Eliminated in {:.0}s", seconds_left.ceil());
+            draw_text(
+                &warning,
+                screen_width() - 320.0,
+                80.0,
+                20.0,
+                Color::new(0.85, 0.15, 0.15, 1.0),
+            );
+        }
+    }
+
+    pub fn draw_game_over(&self, winner: Option<usize>, draw: bool) {
+        if winner.is_none() && !draw {
+            return;
+        }
+
+        draw_rectangle(
+            0.0,
+            0.0,
+            screen_width(),
+            screen_height(),
+            Color::new(0.0, 0.0, 0.0, 0.55),
+        );
+
+        let title = if draw {
+            "Draw — no teams remain".to_string()
+        } else {
+            format!("{} wins!", team_abilities::team_name(winner.unwrap()))
+        };
+
+        let font_size = 48.0;
+        let text_width = measure_text(&title, None, font_size as u16, 1.0).width;
+        draw_text(
+            &title,
+            screen_width() / 2.0 - text_width / 2.0,
+            screen_height() / 2.0 - 10.0,
+            font_size,
+            Color::new(1.0, 0.95, 0.85, 1.0),
+        );
+
+        let subtitle = "Click anywhere or press Q to restart";
+        let sub_size = 22.0;
+        let sub_width = measure_text(subtitle, None, sub_size as u16, 1.0).width;
+        draw_text(
+            subtitle,
+            screen_width() / 2.0 - sub_width / 2.0,
+            screen_height() / 2.0 + 40.0,
+            sub_size,
+            Color::new(0.9, 0.9, 0.9, 1.0),
+        );
     }
 }

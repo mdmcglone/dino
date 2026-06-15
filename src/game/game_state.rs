@@ -4,17 +4,26 @@ use macroquad::prelude::*;
 use crate::maps::{PangaeaMap, Map, TerrainType};
 use crate::rendering::HexMapRenderer;
 use crate::input::{KeyboardHandler, MouseHandler};
-use crate::game::{Nest, nest::{NEST_FARM_RADIUS, SIEGE_DINO_SECONDS_TARGET}};
+use crate::game::{Nest, nest::{NEST_FARM_RADIUS, SIEGE_DINO_SECONDS_TARGET}, spawn_placement, team_abilities};
 use crate::core::{HexCoord, OffsetFarmZone};
 use ::rand::prelude::*;
+use ::rand::seq::SliceRandom;
 use std::collections::{HashMap, BinaryHeap, HashSet};
 use std::cmp::Ordering;
 
 const MEMBERS_PER_TEAM: usize = 3;
 const STARTING_DINOS_PER_TEAM: usize = MEMBERS_PER_TEAM + 1;
 const MIN_NEST_DISTANCE: i32 = 5;
+const PLAYER_TEAMS: usize = team_abilities::PLAYER_TEAMS;
+const KRONO_TEAM: usize = team_abilities::KRONO_TEAM;
+const KRONO_HAZARD_COUNT: usize = 10;
+const KRONO_CYCLE_MULTIPLIER: f64 = 0.5;
+const KRONO_MOVEMENT_MULTIPLIER: f64 = 1.0 / 1.33;
+const KRONO_HUNT_RANGE: i32 = 5;
+const NESTLESS_ELIMINATION_TIME: f64 = 120.0;
+const ROUGH_TERRAIN_ATTACK_CYCLE_MULTIPLIER: f64 = 1.2;
+const ROUGH_TERRAIN_MOVEMENT_MULTIPLIER: f64 = 1.33;
 const BASE_FOOD_CAP: f32 = 100.0;
-const POPULATION_PER_NEST: usize = 20;
 const NEST_SIEGE_ATTACKER_CYCLE_MULTIPLIER: f64 = 1.5;
 const FIRST_NEST_CREATION_COST: usize = 1;
 const NEST_CREATION_COST_INCREMENT: usize = 5;
@@ -90,7 +99,9 @@ struct MovementState {
     current_step_destination: HexCoord,
     current_step_start_time: f64,
     current_step_origin: HexCoord,
-    remaining_path: Vec<HexCoord>, // Queue of remaining tiles to visit
+    current_step_duration: f64,
+    remaining_path: Vec<HexCoord>,
+    remaining_durations: Vec<f64>,
 }
 
 struct Player {
@@ -105,17 +116,32 @@ struct Player {
 
 impl Player {
     fn new(id: usize, team: usize, position: HexCoord) -> Self {
-        Self { id, team, position, selected: false, movement: None, waypoint_queue: Vec::new(), combat_entry_time: None }
+        Self {
+            id,
+            team,
+            position,
+            selected: false,
+            movement: None,
+            waypoint_queue: Vec::new(),
+            combat_entry_time: None,
+        }
     }
     
     fn is_moving(&self) -> bool {
         self.movement.is_some()
     }
     
-    fn start_path_movement(&mut self, path: Vec<HexCoord>, current_time: f64) {
+    fn start_path_movement(
+        &mut self,
+        path: Vec<HexCoord>,
+        step_durations: Vec<f64>,
+        current_time: f64,
+        force_new: bool,
+    ) {
         if path.is_empty() {
             return;
         }
+        debug_assert_eq!(path.len(), step_durations.len());
         
         // Check if in combat and not enough time has passed for retreat
         if let Some(entry_time) = self.combat_entry_time {
@@ -126,54 +152,68 @@ impl Player {
         }
         
         let mut path = path;
+        let mut step_durations = step_durations;
         
         // Check if we're already moving
-        if let Some(movement) = &mut self.movement {
-            // Get the final destination of the new path
-            let new_final_dest = path.last().copied();
-            
-            // Get our current final destination (last in remaining_path, or current_step_destination if no remaining)
-            let current_final_dest = movement.remaining_path.last().copied()
-                .unwrap_or(movement.current_step_destination);
-            
-            // If we're already going to the same final destination, ignore this command
-            if new_final_dest == Some(current_final_dest) {
-                return;
-            }
-            
-            // If the first step of the new path is where we're currently headed, preserve progress
-            if !path.is_empty() && path[0] == movement.current_step_destination {
-                // Remove the first step (since we're already going there)
-                path.remove(0);
-                // Replace the remaining path with the new one (don't append, replace)
-                movement.remaining_path = path;
-                return;
+        if !force_new {
+            if let Some(movement) = &mut self.movement {
+                // Get the final destination of the new path
+                let new_final_dest = path.last().copied();
+                
+                // Get our current final destination (last in remaining_path, or current_step_destination if no remaining)
+                let current_final_dest = movement.remaining_path.last().copied()
+                    .unwrap_or(movement.current_step_destination);
+                
+                // If we're already going to the same final destination, ignore this command
+                if new_final_dest == Some(current_final_dest) {
+                    return;
+                }
+                
+                // If the first step of the new path is where we're currently headed, preserve progress
+                if !path.is_empty() && path[0] == movement.current_step_destination {
+                    // Remove the first step (since we're already going there)
+                    path.remove(0);
+                    step_durations.remove(0);
+                    // Replace the remaining path with the new one (don't append, replace)
+                    movement.remaining_path = path;
+                    movement.remaining_durations = step_durations;
+                    return;
+                }
             }
         }
         
         // Otherwise, start a new movement (cancels current movement)
         let first_step = path.remove(0);
+        let first_duration = step_durations.remove(0);
         
         self.movement = Some(MovementState {
             current_step_destination: first_step,
             current_step_start_time: current_time,
             current_step_origin: self.position,
+            current_step_duration: first_duration,
             remaining_path: path,
+            remaining_durations: step_durations,
         });
+    }
+
+    fn cancel_movement(&mut self) {
+        self.movement = None;
     }
     
     fn update_movement(&mut self, current_time: f64) -> bool {
         if let Some(movement) = &mut self.movement {
-            if current_time - movement.current_step_start_time >= MOVEMENT_TIME {
+            if current_time - movement.current_step_start_time >= movement.current_step_duration {
                 // Complete current step
                 self.position = movement.current_step_destination;
                 
                 // Check if there are more steps in the path
                 if !movement.remaining_path.is_empty() {
                     let next_step = movement.remaining_path.remove(0);
+                    let next_duration = movement.remaining_durations.remove(0);
                     movement.current_step_origin = self.position;
                     movement.current_step_destination = next_step;
                     movement.current_step_start_time = current_time;
+                    movement.current_step_duration = next_duration;
                     return false; // Still moving
                 } else {
                     // Path complete
@@ -216,7 +256,7 @@ impl Player {
     
     fn get_movement_progress(&self, current_time: f64) -> Option<f32> {
         if let Some(movement) = &self.movement {
-            let progress = ((current_time - movement.current_step_start_time) / MOVEMENT_TIME) as f32;
+            let progress = ((current_time - movement.current_step_start_time) / movement.current_step_duration) as f32;
             Some(progress.min(1.0))
         } else {
             None
@@ -229,6 +269,10 @@ impl Player {
     
     fn get_current_step(&self) -> Option<(&HexCoord, &HexCoord)> {
         self.movement.as_ref().map(|m| (&m.current_step_origin, &m.current_step_destination))
+    }
+
+    fn has_planned_route(&self) -> bool {
+        self.movement.is_some() || !self.waypoint_queue.is_empty()
     }
 }
 
@@ -248,16 +292,233 @@ pub struct GameState {
     last_food_update: f64,
     last_siege_update: f64,
     battle_states: HashMap<HexCoord, HashMap<usize, BattleTeamTimer>>,
+    battle_defenders: HashMap<HexCoord, HashSet<usize>>,
+    pre_battle_occupant: HashMap<HexCoord, usize>,
     show_controls: bool,
     nest_creations: HashMap<usize, usize>,
+    eliminated_teams: HashSet<usize>,
+    nestless_since: HashMap<usize, f64>,
+    winner: Option<usize>,
+    game_over_draw: bool,
 }
 
 impl GameState {
     fn is_walkable_land(&self, coord: &HexCoord) -> bool {
+        if !self.is_on_map(coord) {
+            return false;
+        }
         match self.map.get_tile(coord) {
             TerrainType::Water | TerrainType::ShallowWater | TerrainType::Mountain => false,
             _ => true,
         }
+    }
+
+    fn is_on_map(&self, coord: &HexCoord) -> bool {
+        self.map.get_tiles().contains_key(coord)
+    }
+
+    fn is_walkable_for_team(&self, coord: &HexCoord, team: usize) -> bool {
+        if !self.is_on_map(coord) {
+            return false;
+        }
+        if team_abilities::can_fly_over_terrain(team) {
+            return true;
+        }
+        match self.map.get_tile(coord) {
+            TerrainType::Mountain => false,
+            TerrainType::Water => team == KRONO_TEAM,
+            TerrainType::ShallowWater => true,
+            _ => team != KRONO_TEAM,
+        }
+    }
+
+    fn movement_step_duration(&self, from: &HexCoord, to: &HexCoord, team: usize) -> f64 {
+        let crossing_rough_boundary =
+            self.map.get_tile(from).is_rough() != self.map.get_tile(to).is_rough();
+        let mut duration = if crossing_rough_boundary
+            && !team_abilities::ignores_rough_terrain_movement_penalty(team)
+        {
+            MOVEMENT_TIME * ROUGH_TERRAIN_MOVEMENT_MULTIPLIER
+        } else {
+            MOVEMENT_TIME
+        };
+        if Self::is_hazard_team(team) {
+            duration *= KRONO_MOVEMENT_MULTIPLIER;
+        }
+        duration
+    }
+
+    fn build_step_durations(&self, origin: HexCoord, path: &[HexCoord], team: usize) -> Vec<f64> {
+        let mut durations = Vec::with_capacity(path.len());
+        let mut from = origin;
+        for step in path {
+            durations.push(self.movement_step_duration(&from, step, team));
+            from = *step;
+        }
+        durations
+    }
+
+    fn is_player_team(team: usize) -> bool {
+        team < PLAYER_TEAMS
+    }
+
+    fn standing_player_teams(&self) -> Vec<usize> {
+        (0..PLAYER_TEAMS)
+            .filter(|team| !self.eliminated_teams.contains(team))
+            .collect()
+    }
+
+    fn nestless_seconds_remaining(&self, team: usize, current_time: f64) -> Option<f64> {
+        if self.eliminated_teams.contains(&team) || self.team_nest_count(team) > 0 {
+            return None;
+        }
+        let since = self.nestless_since.get(&team).copied()?;
+        Some((NESTLESS_ELIMINATION_TIME - (current_time - since)).max(0.0))
+    }
+
+    fn eliminate_team(&mut self, team: usize, reason: &str) {
+        if !Self::is_player_team(team) || !self.eliminated_teams.insert(team) {
+            return;
+        }
+        self.players.retain(|_, player| player.team != team);
+        self.selected_player_ids.retain(|id| self.players.contains_key(id));
+        self.nestless_since.remove(&team);
+        if self.current_team == team {
+            if let Some(&next) = self.standing_player_teams().first() {
+                self.current_team = next;
+                self.deselect_all();
+            }
+        }
+        println!("Team {} eliminated — {}", team_abilities::team_name(team), reason);
+    }
+
+    fn update_elimination_and_victory(&mut self, current_time: f64) {
+        if self.winner.is_some() || self.game_over_draw {
+            return;
+        }
+
+        for team in 0..PLAYER_TEAMS {
+            if self.eliminated_teams.contains(&team) {
+                continue;
+            }
+
+            if self.team_dino_count(team) == 0 {
+                self.eliminate_team(team, "no dinos remaining");
+                continue;
+            }
+
+            if self.team_nest_count(team) > 0 {
+                self.nestless_since.remove(&team);
+                continue;
+            }
+
+            self.nestless_since.entry(team).or_insert(current_time);
+            let since = self.nestless_since[&team];
+            if current_time - since >= NESTLESS_ELIMINATION_TIME {
+                self.eliminate_team(
+                    team,
+                    &format!("no nest held for {:.0} seconds", NESTLESS_ELIMINATION_TIME),
+                );
+            }
+        }
+
+        let standing = self.standing_player_teams();
+        if standing.len() == 1 {
+            self.winner = Some(standing[0]);
+            println!("{} wins!", team_abilities::team_name(standing[0]));
+        } else if standing.is_empty() {
+            self.game_over_draw = true;
+            println!("Draw — all teams eliminated");
+        }
+    }
+
+    fn reset_victory_state(&mut self) {
+        self.eliminated_teams.clear();
+        self.nestless_since.clear();
+        self.winner = None;
+        self.game_over_draw = false;
+    }
+
+    fn is_hazard_team(team: usize) -> bool {
+        team == KRONO_TEAM
+    }
+
+    fn is_water_tile(&self, coord: &HexCoord) -> bool {
+        self.is_on_map(coord)
+            && matches!(
+                self.map.get_tile(coord),
+                TerrainType::Water | TerrainType::ShallowWater
+            )
+    }
+
+    fn deep_water_tiles(&self) -> Vec<HexCoord> {
+        self.map
+            .get_tiles()
+            .iter()
+            .filter(|(_, terrain)| **terrain == TerrainType::Water)
+            .map(|(coord, _)| *coord)
+            .collect()
+    }
+
+    fn apply_team_combat_cycle_modifier(
+        &self,
+        cycle: f64,
+        team: usize,
+        battle_coord: HexCoord,
+    ) -> f64 {
+        let mut cycle = self.apply_nest_siege_combat_penalty(cycle, battle_coord, team);
+        if Self::is_hazard_team(team) {
+            cycle *= KRONO_CYCLE_MULTIPLIER;
+        } else {
+            cycle *= team_abilities::combat_cycle_multiplier(team);
+        }
+        if !self.map.get_tile(&battle_coord).is_rough() {
+            return cycle;
+        }
+        let is_defender = self
+            .battle_defenders
+            .get(&battle_coord)
+            .map(|defenders| defenders.contains(&team))
+            .unwrap_or(false);
+        if !is_defender {
+            cycle *= ROUGH_TERRAIN_ATTACK_CYCLE_MULTIPLIER;
+        }
+        cycle
+    }
+
+    fn record_battle_defenders(&mut self, battle_coord: HexCoord, teams_present: &HashMap<usize, usize>) {
+        let mut defenders = HashSet::new();
+        if let Some(&occupant) = self.pre_battle_occupant.get(&battle_coord) {
+            if teams_present.contains_key(&occupant) {
+                defenders.insert(occupant);
+            }
+        }
+        self.battle_defenders.insert(battle_coord, defenders);
+    }
+
+    fn update_pre_battle_occupancy(&mut self) {
+        let mut teams_at: HashMap<HexCoord, HashSet<usize>> = HashMap::new();
+        for player in self.players.values() {
+            teams_at
+                .entry(player.position)
+                .or_default()
+                .insert(player.team);
+        }
+        self.pre_battle_occupant = teams_at
+            .into_iter()
+            .filter(|(_, teams)| teams.len() == 1)
+            .map(|(coord, teams)| (coord, *teams.iter().next().unwrap()))
+            .collect();
+    }
+
+    fn find_krono_hunt_target(&self, krono_pos: HexCoord) -> Option<HexCoord> {
+        self.players
+            .values()
+            .filter(|player| !Self::is_hazard_team(player.team))
+            .filter(|player| self.is_water_tile(&player.position))
+            .filter(|player| krono_pos.distance(&player.position) <= KRONO_HUNT_RANGE)
+            .min_by_key(|player| krono_pos.distance(&player.position))
+            .map(|player| player.position)
     }
 
     fn claimed_territory_except(&self, exclude_index: usize) -> HashSet<HexCoord> {
@@ -375,10 +636,14 @@ impl GameState {
 
             let mut delta = 0.0f32;
             if attacker_count > 0 {
-                delta += attacker_count as f32 * dt as f32;
+                delta += attacker_count as f32
+                    * dt as f32
+                    * team_abilities::siege_attack_rate_multiplier(attacker_team) as f32;
             }
             if defender_count > 0 {
-                delta -= defender_count as f32 * dt as f32;
+                delta -= defender_count as f32
+                    * dt as f32
+                    * team_abilities::siege_repair_rate_multiplier(nest_team) as f32;
             }
 
             if delta == 0.0 {
@@ -438,60 +703,27 @@ impl GameState {
         })
     }
 
-    fn is_far_enough_from_other_nests(&self, position: HexCoord, existing_nests: &[HexCoord]) -> bool {
-        existing_nests
-            .iter()
-            .all(|nest_pos| position.distance(nest_pos) >= MIN_NEST_DISTANCE)
-    }
-
-    fn pick_nest_position(
-        &self,
-        land_tiles: &[HexCoord],
-        occupied: &HashSet<HexCoord>,
-        claimed: &HashSet<HexCoord>,
-        existing_nests: &[HexCoord],
-        rng: &mut impl Rng,
-    ) -> HexCoord {
-        let valid_sites: Vec<HexCoord> = land_tiles
-            .iter()
-            .copied()
-            .filter(|coord| {
-                self.is_valid_nest_site(*coord, occupied, claimed)
-                    && self.is_far_enough_from_other_nests(*coord, existing_nests)
-            })
-            .collect();
-
-        if !valid_sites.is_empty() {
-            valid_sites[rng.gen_range(0..valid_sites.len())]
-        } else if !land_tiles.is_empty() {
-            land_tiles[rng.gen_range(0..land_tiles.len())]
-        } else {
-            HexCoord::new(17, 17)
-        }
-    }
-
     fn spawn_initial_teams(
         &mut self,
-        land_tiles: &[HexCoord],
+        walkable: &HashSet<HexCoord>,
         rng: &mut impl Rng,
     ) -> (HashMap<usize, Player>, Vec<Nest>, Vec<(usize, HexCoord)>) {
         let mut players = HashMap::new();
-        let mut occupied = HashSet::new();
         let mut spawn_centers: Vec<(usize, HexCoord)> = Vec::new();
 
-        for team in 0..self.num_teams {
-            let existing: Vec<HexCoord> = spawn_centers.iter().map(|(_, coord)| *coord).collect();
-            let spawn_center = self.pick_nest_position(
-                land_tiles,
-                &occupied,
-                &HashSet::new(),
-                &existing,
-                rng,
-            );
+        let centers = spawn_placement::pick_balanced_spawn_centers(
+            walkable,
+            self.num_teams,
+            MIN_NEST_DISTANCE,
+            |position, occupied_tiles| {
+                self.is_valid_nest_site(position, occupied_tiles, &HashSet::new())
+            },
+            |position| Nest::new(0, position, &HashSet::new()).occupied_tiles(),
+            rng,
+        );
+
+        for (team, spawn_center) in centers.into_iter().enumerate() {
             let staging = Nest::new(team, spawn_center, &HashSet::new());
-            for coord in staging.occupied_tiles() {
-                occupied.insert(coord);
-            }
             spawn_centers.push((team, spawn_center));
 
             for spawn_pos in staging.occupied_tiles() {
@@ -609,7 +841,7 @@ impl GameState {
     }
 
     fn team_population_cap(&self, team: usize) -> usize {
-        self.team_nest_count(team) * POPULATION_PER_NEST
+        self.team_nest_count(team) * team_abilities::population_per_nest(team)
     }
 
     fn can_spawn_dino(&self, team: usize) -> bool {
@@ -646,7 +878,7 @@ impl GameState {
 
         let mut gathering_tiles: HashMap<usize, HashSet<HexCoord>> = HashMap::new();
         for player in self.players.values() {
-            if !player.is_stationary() {
+            if Self::is_hazard_team(player.team) || !player.is_stationary() {
                 continue;
             }
             if !self.can_farm_tile(&player.position, player.team) {
@@ -733,14 +965,18 @@ impl GameState {
     }
 
     fn eliminate_enemy_at(&mut self, coord: HexCoord, killer_team: usize) {
-        if let Some(target_id) = self
+        let target = self
             .players
             .iter()
             .find(|(_, player)| player.position == coord && player.team != killer_team)
-            .map(|(id, _)| *id)
-        {
+            .map(|(id, player)| (*id, player.team));
+
+        if let Some((target_id, target_team)) = target {
             self.players.remove(&target_id);
             self.selected_player_ids.retain(|&id| id != target_id);
+            if Self::is_hazard_team(target_team) {
+                self.respawn_krono();
+            }
         }
     }
 
@@ -754,7 +990,7 @@ impl GameState {
         let team_count = team_counts.get(&team).copied().unwrap_or(0);
         let enemy_count = Self::primary_enemy_count(team_counts, team);
         let cycle = compute_combat_cycle(BASE_BATTLE_CYCLE, team_count, enemy_count);
-        let cycle = self.apply_nest_siege_combat_penalty(cycle, battle_coord, team);
+        let cycle = self.apply_team_combat_cycle_modifier(cycle, team, battle_coord);
         BattleTeamTimer::new(current_time, cycle)
     }
 
@@ -790,9 +1026,12 @@ impl GameState {
         state.retain(|team, _| team_counts.contains_key(team));
     }
 
-    fn process_battles(&mut self, battles: &[HexCoord], current_time: f64) {
+    fn process_battles(&mut self, battles: &HashSet<HexCoord>, current_time: f64) {
         for battle_coord in battles {
             let is_new_battle = !self.battle_states.contains_key(battle_coord);
+            if is_new_battle {
+                self.record_battle_defenders(*battle_coord, &self.team_counts_at(*battle_coord));
+            }
             self.sync_battle_state(*battle_coord, current_time);
 
             for player in self.players.values_mut() {
@@ -833,7 +1072,8 @@ impl GameState {
                 let team_count = updated_counts.get(&killer_team).copied().unwrap_or(0);
                 let enemy_count = Self::primary_enemy_count(&updated_counts, killer_team);
                 let next_cycle = compute_combat_cycle(BASE_BATTLE_CYCLE, team_count, enemy_count);
-                let next_cycle = self.apply_nest_siege_combat_penalty(next_cycle, *battle_coord, killer_team);
+                let next_cycle =
+                    self.apply_team_combat_cycle_modifier(next_cycle, killer_team, *battle_coord);
 
                 if let Some(timer) = self.battle_states.get_mut(battle_coord).and_then(|s| s.get_mut(&killer_team)) {
                     timer.start_next_cycle(current_time, next_cycle);
@@ -841,25 +1081,54 @@ impl GameState {
             }
         }
 
-        let active_battles: HashSet<HexCoord> = battles.iter().copied().collect();
-        self.battle_states.retain(|coord, _| active_battles.contains(coord));
+        self.battle_states.retain(|coord, _| battles.contains(coord));
+        self.battle_defenders.retain(|coord, _| battles.contains(coord));
 
         for player in self.players.values_mut() {
-            if !active_battles.contains(&player.position) {
+            if !battles.contains(&player.position) {
                 player.combat_entry_time = None;
             }
         }
     }
 
+    fn movement_route_for_player(&self, player: &Player) -> Vec<HexCoord> {
+        let mut route = vec![player.position];
+
+        if let Some(movement) = &player.movement {
+            if route.last() != Some(&movement.current_step_destination) {
+                route.push(movement.current_step_destination);
+            }
+            for tile in &movement.remaining_path {
+                if route.last() != Some(tile) {
+                    route.push(*tile);
+                }
+            }
+        }
+
+        let mut from = *route.last().unwrap_or(&player.position);
+        for waypoint in &player.waypoint_queue {
+            if let Some(path) = self.find_path(&from, waypoint, player.team) {
+                for tile in path {
+                    if route.last() != Some(&tile) {
+                        route.push(tile);
+                    }
+                }
+                from = *waypoint;
+            } else {
+                break;
+            }
+        }
+
+        route
+    }
+
     /// A* pathfinding algorithm to find the shortest path between two hexes
-    fn find_path(&self, start: &HexCoord, goal: &HexCoord, _team: usize) -> Option<Vec<HexCoord>> {
+    fn find_path(&self, start: &HexCoord, goal: &HexCoord, team: usize) -> Option<Vec<HexCoord>> {
         if start == goal {
             return Some(vec![]);
         }
-        
-        // Check if goal is walkable (teams can occupy same tiles for battles)
-        let goal_terrain = self.map.get_tile(goal);
-        if goal_terrain == TerrainType::Water || goal_terrain == TerrainType::Mountain {
+
+        if !self.is_walkable_for_team(goal, team) {
             return None;
         }
         
@@ -903,10 +1172,8 @@ impl GameState {
                 if closed_set.contains(&neighbor) {
                     continue;
                 }
-                
-                // Check if neighbor is walkable (teams can pass through each other)
-                let terrain = self.map.get_tile(&neighbor);
-                if terrain == TerrainType::Water || terrain == TerrainType::Mountain {
+
+                if !self.is_walkable_for_team(&neighbor, team) {
                     continue;
                 }
                 
@@ -928,6 +1195,101 @@ impl GameState {
         
         None // No path found
     }
+
+    fn spawn_krono_at(&mut self, coord: HexCoord) {
+        let player_id = self.next_player_id;
+        self.next_player_id += 1;
+        self.players
+            .insert(player_id, Player::new(player_id, KRONO_TEAM, coord));
+    }
+
+    fn respawn_krono(&mut self) {
+        let mut rng = thread_rng();
+        let mut deep_water = self.deep_water_tiles();
+        if deep_water.is_empty() {
+            return;
+        }
+        deep_water.shuffle(&mut rng);
+        self.spawn_krono_at(deep_water[0]);
+    }
+
+    fn spawn_krono_hazards(&mut self, rng: &mut impl Rng) {
+        let mut deep_water = self.deep_water_tiles();
+        if deep_water.is_empty() {
+            return;
+        }
+
+        deep_water.shuffle(rng);
+        let spawn_count = KRONO_HAZARD_COUNT.min(deep_water.len());
+
+        for coord in deep_water.into_iter().take(spawn_count) {
+            self.spawn_krono_at(coord);
+        }
+    }
+
+    fn krono_movement_destination(&self, player: &Player) -> HexCoord {
+        player
+            .movement
+            .as_ref()
+            .map(|movement| {
+                movement
+                    .remaining_path
+                    .last()
+                    .copied()
+                    .unwrap_or(movement.current_step_destination)
+            })
+            .unwrap_or(player.position)
+    }
+
+    fn update_krono_hazards(&mut self, current_time: f64, battle_coords: &HashSet<HexCoord>) {
+        let mut rng = thread_rng();
+        let hazard_ids: Vec<usize> = self
+            .players
+            .iter()
+            .filter(|(_, player)| {
+                player.team == KRONO_TEAM && !battle_coords.contains(&player.position)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+
+        for id in hazard_ids {
+            let position = self.players.get(&id).unwrap().position;
+
+            if let Some(target) = self.find_krono_hunt_target(position) {
+                if let Some(path) = self.find_path(&position, &target, KRONO_TEAM) {
+                    let current_dest = self.krono_movement_destination(self.players.get(&id).unwrap());
+                    if current_dest != target {
+                        let durations = self.build_step_durations(position, &path, KRONO_TEAM);
+                        if let Some(player) = self.players.get_mut(&id) {
+                            player.start_path_movement(path, durations, current_time, true);
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            let player = self.players.get(&id).unwrap();
+            if player.is_moving() {
+                continue;
+            }
+
+            let neighbors: Vec<HexCoord> = position
+                .offset_neighbors()
+                .into_iter()
+                .filter(|coord| self.is_walkable_for_team(coord, KRONO_TEAM))
+                .collect();
+            if neighbors.is_empty() {
+                continue;
+            }
+
+            let destination = neighbors[rng.gen_range(0..neighbors.len())];
+            let path = vec![destination];
+            let durations = self.build_step_durations(position, &path, KRONO_TEAM);
+            if let Some(player) = self.players.get_mut(&id) {
+                player.start_path_movement(path, durations, current_time, true);
+            }
+        }
+    }
     
     pub fn new() -> Self {
         println!("\n=== PANGAEA ===");
@@ -937,7 +1299,7 @@ impl GameState {
         
         // Find random land tiles for spawning characters (exclude water and mountains)
         let mut rng = thread_rng();
-        let land_tiles: Vec<HexCoord> = map.get_tiles()
+        let walkable: HashSet<HexCoord> = map.get_tiles()
             .iter()
             .filter(|(_, terrain)| {
                 **terrain != TerrainType::Water 
@@ -947,8 +1309,8 @@ impl GameState {
             .map(|(coord, _)| *coord)
             .collect();
         
-        // Spawn each team around a randomly chosen nest
-        let num_teams = 2;
+        // Spawn each team at balanced positions across the map
+        let num_teams = PLAYER_TEAMS;
         let mut game_state = Self {
             map,
             renderer: HexMapRenderer::new(),
@@ -965,21 +1327,32 @@ impl GameState {
             last_food_update: 0.0,
             last_siege_update: 0.0,
             battle_states: HashMap::new(),
+            battle_defenders: HashMap::new(),
+            pre_battle_occupant: HashMap::new(),
             show_controls: true,
             nest_creations: HashMap::new(),
+            eliminated_teams: HashSet::new(),
+            nestless_since: HashMap::new(),
+            winner: None,
+            game_over_draw: false,
         };
 
-        let (players, nests, spawn_centers) = game_state.spawn_initial_teams(&land_tiles, &mut rng);
+        let (players, nests, spawn_centers) = game_state.spawn_initial_teams(&walkable, &mut rng);
         game_state.players = players;
         game_state.nests = nests;
+        game_state.spawn_krono_hazards(&mut rng);
 
         println!("\nMap generated!");
         for (team, center) in spawn_centers {
             println!(
-                "Team {} starts with {} dinos near ({}, {}) — place first nest with P (costs 1)",
-                team, STARTING_DINOS_PER_TEAM, center.q, center.r,
+                "{} starts with {} dinos near ({}, {}) — place first nest with P (costs 1)",
+                team_abilities::team_name(team), STARTING_DINOS_PER_TEAM, center.q, center.r,
             );
         }
+        println!(
+            "{} Kronos spawned in the oceans — avoid shallow water!",
+            KRONO_HAZARD_COUNT,
+        );
         println!("\n=== CONTROLS ===");
         println!("Left-click: Select character(s) / Move selected characters");
         println!("Right-click & drag: Rectangle select multiple characters");
@@ -995,7 +1368,7 @@ impl GameState {
         println!("+/-: Zoom in/out");
         println!("0: Reset zoom");
         println!("\n=== BATTLE ===");
-        println!("Movement: {:.1} second(s) per tile", MOVEMENT_TIME);
+        println!("Movement: {:.1}s per tile ({:.2}s when entering/exiting rough terrain)", MOVEMENT_TIME, MOVEMENT_TIME * ROUGH_TERRAIN_MOVEMENT_MULTIPLIER);
         println!("Base battle cycle: {:.1} second(s) between kills", BASE_BATTLE_CYCLE);
         println!("Retreat time: {:.1} second(s) minimum in combat", RETREAT_TIME);
         
@@ -1017,8 +1390,16 @@ impl GameState {
     /// Cycle to the next team
     fn cycle_team(&mut self) {
         self.deselect_all();
-        self.current_team = (self.current_team + 1) % self.num_teams;
-        println!("Switched to Team {}", self.current_team);
+        if self.standing_player_teams().len() <= 1 {
+            return;
+        }
+        for _ in 0..self.num_teams {
+            self.current_team = (self.current_team + 1) % self.num_teams;
+            if !self.eliminated_teams.contains(&self.current_team) {
+                println!("Switched to {}", team_abilities::team_name(self.current_team));
+                return;
+            }
+        }
     }
     
     /// Get all player IDs at a specific tile (filtered by current team)
@@ -1030,8 +1411,36 @@ impl GameState {
             .collect()
     }
     
+    /// All selected units for the current team (movement commands use this, not just selected_player_ids).
+    fn command_selected_player_ids(&self) -> Vec<usize> {
+        self.players
+            .iter()
+            .filter(|(_, player)| {
+                player.selected
+                    && player.team == self.current_team
+                    && !Self::is_hazard_team(player.team)
+            })
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    fn selection_spans_multiple_tiles(&self) -> bool {
+        let mut positions = HashSet::new();
+        for id in self.command_selected_player_ids() {
+            if let Some(player) = self.players.get(&id) {
+                positions.insert(player.position);
+            }
+        }
+        positions.len() > 1
+    }
+
+    fn sync_selected_player_ids(&mut self) {
+        self.selected_player_ids = self.command_selected_player_ids();
+    }
+    
     /// Select all players at a given tile
     fn select_players_at_tile(&mut self, coord: &HexCoord) {
+        self.deselect_all();
         self.selected_player_ids = self.get_players_at_tile(coord);
         for id in &self.selected_player_ids {
             if let Some(player) = self.players.get_mut(id) {
@@ -1082,10 +1491,16 @@ impl GameState {
         }
     }
     
-    /// Reset all players to new nest positions
-    fn reset_players(&mut self) {
+    /// Full game restart — respawns teams, clears match state, recenters the camera.
+    fn restart_game(&mut self) {
+        self.reset_victory_state();
+        self.deselect_all();
+        self.selection_box_start = None;
+        self.selection_box_current = None;
+        self.current_team = 0;
+
         let mut rng = thread_rng();
-        let land_tiles: Vec<HexCoord> = self.map.get_tiles()
+        let walkable: HashSet<HexCoord> = self.map.get_tiles()
             .iter()
             .filter(|(_, terrain)| {
                 **terrain != TerrainType::Water 
@@ -1098,13 +1513,31 @@ impl GameState {
         self.next_player_id = 0;
         self.last_food_update = get_time();
         self.last_siege_update = get_time();
-        let (players, nests, _spawn_centers) = self.spawn_initial_teams(&land_tiles, &mut rng);
+        self.players.clear();
+        self.nests.clear();
+        self.battle_states.clear();
+        self.battle_defenders.clear();
+        self.pre_battle_occupant.clear();
+        self.nest_creations.clear();
+
+        let (players, nests, spawn_centers) = self.spawn_initial_teams(&walkable, &mut rng);
         self.players = players;
         self.nests = nests;
-        self.selected_player_ids.clear();
-        self.battle_states.clear();
-        self.nest_creations.clear();
-        println!("Dinos reset to new nest positions!");
+        self.spawn_krono_hazards(&mut rng);
+
+        self.renderer.reset_zoom();
+        if let Some((_, center)) = spawn_centers.iter().find(|(team, _)| *team == 0) {
+            self.renderer.center_camera_on(center);
+        }
+
+        println!("Game restarted — place your first nest with P (costs 1 dino)");
+    }
+
+    fn game_over_restart_requested(&self) -> bool {
+        if self.winner.is_none() && !self.game_over_draw {
+            return false;
+        }
+        is_key_pressed(KeyCode::Q) || is_mouse_button_pressed(MouseButton::Left)
     }
     
     /// Adjust selection to only include N characters from the currently selected group
@@ -1139,6 +1572,23 @@ impl GameState {
     
     pub fn update(&mut self) -> bool {
         let current_time = get_time();
+
+        if is_key_pressed(KeyCode::Escape) {
+            return true;
+        }
+
+        if self.winner.is_some() || self.game_over_draw {
+            if self.game_over_restart_requested() {
+                self.restart_game();
+            }
+            return false;
+        }
+
+        self.update_elimination_and_victory(current_time);
+        if self.winner.is_some() || self.game_over_draw {
+            return false;
+        }
+
         let battle_coords = self.battle_coords();
 
         self.update_food_gathering(current_time, &battle_coords);
@@ -1160,23 +1610,10 @@ impl GameState {
             ));
         }
         
-        // Phase 2: detect battles and stop all pathing for participants entering combat
-        let mut contested_tiles: HashMap<HexCoord, Vec<usize>> = HashMap::new();
-        for &player_id in &player_ids {
-            if let Some(player) = self.players.get(&player_id) {
-                contested_tiles.entry(player.position).or_insert_with(Vec::new).push(player.team);
-            }
-        }
-        
-        let mut battles: Vec<HexCoord> = Vec::new();
-        for (coord, teams) in &contested_tiles {
-            let unique_teams: HashSet<usize> = teams.iter().copied().collect();
-            if unique_teams.len() > 1 {
-                battles.push(*coord);
-            }
-        }
-        
-        self.process_battles(&battles, current_time);
+        // Phase 2: stop pathing for participants entering combat
+        self.process_battles(&battle_coords, current_time);
+
+        self.update_krono_hazards(current_time, &battle_coords);
         
         // Phase 3: waypoint continuation and auto-select (after combat stops pathing)
         let mut positions_to_auto_select: Vec<HexCoord> = Vec::new();
@@ -1184,7 +1621,7 @@ impl GameState {
         for (player_id, movement_complete, player_pos, was_selected, player_team) in movement_results {
             if movement_complete && was_selected {
                 if let Some(player) = self.players.get(&player_id) {
-                    if !player.has_waypoints() {
+                    if !player.has_waypoints() && !self.selection_spans_multiple_tiles() {
                         let players_at_pos = self.get_players_at_tile(&player_pos);
                         if players_at_pos.len() > 1 {
                             positions_to_auto_select.push(player_pos);
@@ -1194,6 +1631,9 @@ impl GameState {
             }
             
             if movement_complete {
+                if Self::is_hazard_team(player_team) {
+                    continue;
+                }
                 let (from_pos, next_waypoint) = match self.players.get(&player_id) {
                     Some(player) => match player.peek_next_waypoint() {
                         Some(waypoint) => (player.position, waypoint),
@@ -1202,9 +1642,10 @@ impl GameState {
                     None => continue,
                 };
                 if let Some(path) = self.find_path(&from_pos, &next_waypoint, player_team) {
+                    let durations = self.build_step_durations(from_pos, &path, player_team);
                     if let Some(player) = self.players.get_mut(&player_id) {
                         player.get_next_waypoint();
-                        player.start_path_movement(path, current_time);
+                        player.start_path_movement(path, durations, current_time, false);
                     }
                 }
             }
@@ -1252,21 +1693,18 @@ impl GameState {
                 
                 // Check if there are any players at the clicked tile
                 let players_at_tile = self.get_players_at_tile(&clicked_hex);
-                let any_selected = !self.selected_player_ids.is_empty();
+                let selected_ids = self.command_selected_player_ids();
+                let any_selected = !selected_ids.is_empty();
                 
                 if !players_at_tile.is_empty() && !any_selected {
                     // Clicking on a tile with players while nothing selected -> select all at that tile
                     self.select_players_at_tile(&clicked_hex);
                 } else if any_selected {
-                    // We have selected players - this is a movement command
-                    // Calculate paths for each selected player
-                    let mut movements: Vec<(usize, Option<Vec<HexCoord>>, HexCoord)> = Vec::new();
+                    let mut movements: Vec<(usize, Option<Vec<HexCoord>>, HexCoord, usize)> = Vec::new();
                     
-                    for &player_id in &self.selected_player_ids {
+                    for &player_id in &selected_ids {
                         if let Some(player) = self.players.get(&player_id) {
-                            // Determine start position for pathfinding
                             let path_start = if shift_held {
-                                // For shift-queue, start from last waypoint or destination
                                 if !player.waypoint_queue.is_empty() {
                                     *player.waypoint_queue.last().unwrap()
                                 } else if let Some(movement) = &player.movement {
@@ -1280,45 +1718,46 @@ impl GameState {
                             };
                             
                             let path = self.find_path(&path_start, &clicked_hex, player.team);
-                            movements.push((player_id, path, player.position));
+                            movements.push((player_id, path, player.position, player.team));
                         }
                     }
                     
-                    // Apply movements to all selected players
-                    for (player_id, path, _) in movements {
+                    for (player_id, path, origin, team) in movements {
+                        let Some(path) = path else { continue };
+                        let durations = self.build_step_durations(origin, &path, team);
                         if let Some(player) = self.players.get_mut(&player_id) {
                             if shift_held {
-                                // Shift-click: add to waypoint queue
+                                if path.is_empty() {
+                                    continue;
+                                }
                                 if player.is_moving() {
                                     player.add_waypoint(clicked_hex);
-                                } else if let Some(path) = path {
-                                    if !path.is_empty() {
-                                        player.start_path_movement(path, current_time);
-                                    }
+                                } else {
+                                    player.start_path_movement(path, durations, current_time, false);
                                 }
                             } else {
-                                // Normal click: clear queue and move directly
                                 player.clear_waypoints();
-                                if let Some(path) = path {
-                                    if !path.is_empty() {
-                                        player.start_path_movement(path, current_time);
-                                    }
+                                if path.is_empty() {
+                                    player.cancel_movement();
+                                    continue;
                                 }
+                                player.start_path_movement(path, durations, current_time, true);
                             }
                         }
                     }
+                    self.sync_selected_player_ids();
                 }
             }
         }
         
         // Handle P key to place a nest
-        if is_key_pressed(KeyCode::P) {
+        if is_key_pressed(KeyCode::P) && !self.eliminated_teams.contains(&self.current_team) {
             self.try_create_nest();
         }
 
-        // Handle Q key to reset dinos
+        // Handle Q key to restart (mid-game debug reset)
         if is_key_pressed(KeyCode::Q) {
-            self.reset_players();
+            self.restart_game();
         }
 
         if is_key_pressed(KeyCode::Z) {
@@ -1374,6 +1813,8 @@ impl GameState {
             }
         }
         
+        self.update_pre_battle_occupancy();
+
         // Handle keyboard input and return true if should exit
         self.keyboard_handler.handle_input(&mut self.renderer)
     }
@@ -1384,9 +1825,6 @@ impl GameState {
         
         // Clear screen with light blue-gray background
         clear_background(Color::new(0.85, 0.85, 0.9, 1.0));
-        
-        // Draw grid effect
-        self.renderer.draw_grid_effect();
         
         // Draw hex map with fog of war
         self.renderer.draw_map_with_fog(&self.map, &visible);
@@ -1464,14 +1902,26 @@ impl GameState {
             if is_battle {
                 self.renderer.draw_battle_indicator(position);
             }
-            
-            // Draw movement arrow for the first moving player at this position
-            if let Some(player) = players_at_pos.iter().find(|p| p.is_moving()) {
-                if let Some((origin, destination)) = player.get_current_step() {
-                    let progress = player.get_movement_progress(current_time).unwrap_or(0.0);
-                    self.renderer.draw_movement_arrow(origin, destination, progress);
-                }
+        }
+
+        // Draw movement paths (current leg + queued waypoints)
+        for player in self.players.values() {
+            if Self::is_hazard_team(player.team) || !player.has_planned_route() {
+                continue;
             }
+            if !visible.contains(&player.position) {
+                continue;
+            }
+            let route = self.movement_route_for_player(player);
+            if route.len() < 2 {
+                continue;
+            }
+            let active_progress = if player.is_moving() {
+                player.get_movement_progress(current_time)
+            } else {
+                None
+            };
+            self.renderer.draw_movement_path(&route, active_progress);
         }
         
         // Draw selection box if active
@@ -1485,6 +1935,9 @@ impl GameState {
             self.current_team,
             self.team_dino_count(self.current_team),
             self.team_population_cap(self.current_team),
+            self.nestless_seconds_remaining(self.current_team, current_time),
         );
+
+        self.renderer.draw_game_over(self.winner, self.game_over_draw);
     }
 } 

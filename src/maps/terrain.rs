@@ -53,4 +53,14 @@ impl TerrainType {
             TerrainType::Desert | TerrainType::Mountain | TerrainType::Water => 0.0,
         }
     }
+
+    pub fn is_rough(&self) -> bool {
+        matches!(
+            self,
+            TerrainType::Forest
+                | TerrainType::Jungle
+                | TerrainType::Hills
+                | TerrainType::ShallowWater
+        )
+    }
 } 
