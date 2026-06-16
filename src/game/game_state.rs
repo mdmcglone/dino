@@ -1448,7 +1448,74 @@ impl GameState {
             }
         }
     }
-    
+
+    fn add_players_at_tile_to_selection(&mut self, coord: &HexCoord) {
+        for id in self.get_players_at_tile(coord) {
+            if self.players.get(&id).is_some_and(|player| player.selected) {
+                continue;
+            }
+            self.selected_player_ids.push(id);
+            if let Some(player) = self.players.get_mut(&id) {
+                player.selected = true;
+            }
+        }
+    }
+
+    fn issue_movement_orders(
+        &mut self,
+        clicked_hex: HexCoord,
+        selected_ids: &[usize],
+        queue_waypoints: bool,
+        current_time: f64,
+    ) {
+        let mut movements: Vec<(usize, Option<Vec<HexCoord>>, HexCoord, usize)> = Vec::new();
+
+        for &player_id in selected_ids {
+            let Some(player) = self.players.get(&player_id) else { continue };
+            let path_start = if queue_waypoints {
+                if !player.waypoint_queue.is_empty() {
+                    *player.waypoint_queue.last().unwrap()
+                } else if let Some(movement) = &player.movement {
+                    movement
+                        .remaining_path
+                        .last()
+                        .copied()
+                        .unwrap_or(movement.current_step_destination)
+                } else {
+                    player.position
+                }
+            } else {
+                player.position
+            };
+
+            let path = self.find_path(&path_start, &clicked_hex, player.team);
+            movements.push((player_id, path, player.position, player.team));
+        }
+
+        for (player_id, path, origin, team) in movements {
+            let Some(path) = path else { continue };
+            let durations = self.build_step_durations(origin, &path, team);
+            let Some(player) = self.players.get_mut(&player_id) else { continue };
+            if queue_waypoints {
+                if path.is_empty() {
+                    continue;
+                }
+                if player.is_moving() {
+                    player.add_waypoint(clicked_hex);
+                } else {
+                    player.start_path_movement(path, durations, current_time, false);
+                }
+            } else {
+                player.clear_waypoints();
+                if path.is_empty() {
+                    player.cancel_movement();
+                    continue;
+                }
+                player.start_path_movement(path, durations, current_time, false);
+            }
+        }
+        self.sync_selected_player_ids();
+    }
     /// Get all players whose tiles are inside the selection rectangle (filtered by current team)
     fn get_players_in_selection_box(&self) -> Vec<usize> {
         if self.selection_box_start.is_none() || self.selection_box_current.is_none() {
@@ -1540,32 +1607,46 @@ impl GameState {
         is_key_pressed(KeyCode::Q) || is_mouse_button_pressed(MouseButton::Left)
     }
     
-    /// Adjust selection to only include N characters from the currently selected group
+    fn selected_player_ids_at_tile(&self, coord: &HexCoord) -> Vec<usize> {
+        self.selected_player_ids
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.players
+                    .get(id)
+                    .is_some_and(|player| player.position == *coord)
+            })
+            .collect()
+    }
+
+    /// Adjust selection to only include N characters from the active understack
+    /// (selected units sharing the first selected unit's tile).
     fn select_subset(&mut self, count: usize) {
         if self.selected_player_ids.is_empty() {
             return;
         }
-        
-        // Get the position of the first selected player
-        let first_selected_pos = self.players.get(&self.selected_player_ids[0])
-            .map(|p| p.position);
-        
-        if let Some(pos) = first_selected_pos {
-            // Get all players at that position
-            let players_at_pos = self.get_players_at_tile(&pos);
-            
-            // Deselect all first
-            self.deselect_all();
-            
-            // Select up to 'count' players from that position
-            let to_select = count.min(players_at_pos.len());
-            self.selected_player_ids = players_at_pos.into_iter().take(to_select).collect();
-            
-            // Mark them as selected
-            for id in &self.selected_player_ids {
-                if let Some(player) = self.players.get_mut(id) {
-                    player.selected = true;
-                }
+
+        let Some(first_selected_pos) = self
+            .players
+            .get(&self.selected_player_ids[0])
+            .map(|p| p.position)
+        else {
+            return;
+        };
+
+        let selected_at_pos = self.selected_player_ids_at_tile(&first_selected_pos);
+        if selected_at_pos.is_empty() {
+            return;
+        }
+
+        self.deselect_all();
+
+        let to_select = count.min(selected_at_pos.len());
+        self.selected_player_ids = selected_at_pos.into_iter().take(to_select).collect();
+
+        for id in &self.selected_player_ids {
+            if let Some(player) = self.players.get_mut(id) {
+                player.selected = true;
             }
         }
     }
@@ -1695,57 +1776,18 @@ impl GameState {
                 let players_at_tile = self.get_players_at_tile(&clicked_hex);
                 let selected_ids = self.command_selected_player_ids();
                 let any_selected = !selected_ids.is_empty();
-                
-                if !players_at_tile.is_empty() && !any_selected {
-                    // Clicking on a tile with players while nothing selected -> select all at that tile
+                let clicked_friendly_stack = !players_at_tile.is_empty();
+
+                if shift_held && clicked_friendly_stack {
+                    if any_selected {
+                        self.add_players_at_tile_to_selection(&clicked_hex);
+                    } else {
+                        self.select_players_at_tile(&clicked_hex);
+                    }
+                } else if !any_selected && clicked_friendly_stack {
                     self.select_players_at_tile(&clicked_hex);
                 } else if any_selected {
-                    let mut movements: Vec<(usize, Option<Vec<HexCoord>>, HexCoord, usize)> = Vec::new();
-                    
-                    for &player_id in &selected_ids {
-                        if let Some(player) = self.players.get(&player_id) {
-                            let path_start = if shift_held {
-                                if !player.waypoint_queue.is_empty() {
-                                    *player.waypoint_queue.last().unwrap()
-                                } else if let Some(movement) = &player.movement {
-                                    movement.remaining_path.last().copied()
-                                        .unwrap_or(movement.current_step_destination)
-                                } else {
-                                    player.position
-                                }
-                            } else {
-                                player.position
-                            };
-                            
-                            let path = self.find_path(&path_start, &clicked_hex, player.team);
-                            movements.push((player_id, path, player.position, player.team));
-                        }
-                    }
-                    
-                    for (player_id, path, origin, team) in movements {
-                        let Some(path) = path else { continue };
-                        let durations = self.build_step_durations(origin, &path, team);
-                        if let Some(player) = self.players.get_mut(&player_id) {
-                            if shift_held {
-                                if path.is_empty() {
-                                    continue;
-                                }
-                                if player.is_moving() {
-                                    player.add_waypoint(clicked_hex);
-                                } else {
-                                    player.start_path_movement(path, durations, current_time, false);
-                                }
-                            } else {
-                                player.clear_waypoints();
-                                if path.is_empty() {
-                                    player.cancel_movement();
-                                    continue;
-                                }
-                                player.start_path_movement(path, durations, current_time, true);
-                            }
-                        }
-                    }
-                    self.sync_selected_player_ids();
+                    self.issue_movement_orders(clicked_hex, &selected_ids, shift_held, current_time);
                 }
             }
         }
@@ -1771,10 +1813,15 @@ impl GameState {
         
         // Handle selection modification keys (E, R, 1-9) for splitting stacks
         if !self.selected_player_ids.is_empty() {
-            // E key - select half (rounded up)
-            if is_key_pressed(KeyCode::E) {
-                let current_count = self.selected_player_ids.len();
-                let half = (current_count + 1) / 2; // Round up
+            let understack_size = self
+                .players
+                .get(&self.selected_player_ids[0])
+                .map(|first| self.selected_player_ids_at_tile(&first.position).len())
+                .unwrap_or(0);
+
+            // E key - select half (rounded up) of the active understack
+            if is_key_pressed(KeyCode::E) && understack_size > 0 {
+                let half = (understack_size + 1) / 2;
                 self.select_subset(half);
             }
             

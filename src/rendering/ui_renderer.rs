@@ -113,7 +113,7 @@ impl UIRenderer {
         );
 
         let title = if draw {
-            "Draw — no teams remain".to_string()
+            "Draw - no teams remain".to_string()
         } else {
             format!("{} wins!", team_abilities::team_name(winner.unwrap()))
         };

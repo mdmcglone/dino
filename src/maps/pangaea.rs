@@ -44,6 +44,7 @@ impl PangaeaMap {
         self.add_deserts();
         self.add_forests_and_jungles();
         self.add_coastal_features();
+        self.fill_mountain_enclosures();
     }
     
     fn create_pangaea_shape(&mut self) {
@@ -216,6 +217,49 @@ impl PangaeaMap {
                     } else if rng.gen::<f32>() < 0.4 {
                         self.tiles.insert(coord, TerrainType::Forest);
                     }
+                }
+            }
+        }
+    }
+    
+    fn fill_mountain_enclosures(&mut self) {
+        let mut exterior = HashSet::new();
+        let mut queue = VecDeque::new();
+
+        for q in 0..self.width {
+            for r in 0..self.height {
+                let on_border = q == 0 || q == self.width - 1 || r == 0 || r == self.height - 1;
+                if !on_border {
+                    continue;
+                }
+                let coord = HexCoord::new(q, r);
+                if self.get_tile(&coord) != TerrainType::Mountain && exterior.insert(coord) {
+                    queue.push_back(coord);
+                }
+            }
+        }
+
+        while let Some(current) = queue.pop_front() {
+            for neighbor in current.offset_neighbors() {
+                if neighbor.q < 0
+                    || neighbor.q >= self.width
+                    || neighbor.r < 0
+                    || neighbor.r >= self.height
+                {
+                    continue;
+                }
+                if self.get_tile(&neighbor) == TerrainType::Mountain || !exterior.insert(neighbor) {
+                    continue;
+                }
+                queue.push_back(neighbor);
+            }
+        }
+
+        for q in 0..self.width {
+            for r in 0..self.height {
+                let coord = HexCoord::new(q, r);
+                if self.get_tile(&coord) != TerrainType::Mountain && !exterior.contains(&coord) {
+                    self.tiles.insert(coord, TerrainType::Mountain);
                 }
             }
         }
