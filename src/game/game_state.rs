@@ -1449,6 +1449,36 @@ impl GameState {
         }
     }
 
+    fn unselected_player_ids_at_tile(&self, coord: &HexCoord) -> Vec<usize> {
+        self.get_players_at_tile(coord)
+            .into_iter()
+            .filter(|id| !self.players.get(id).is_some_and(|player| player.selected))
+            .collect()
+    }
+
+    fn selection_includes_tile(&self, coord: &HexCoord) -> bool {
+        self.selected_player_ids.iter().any(|id| {
+            self.players
+                .get(id)
+                .is_some_and(|player| player.position == *coord)
+        })
+    }
+
+    /// Select only units on this tile that are not already selected.
+    fn select_unselected_at_tile(&mut self, coord: &HexCoord) {
+        let to_select = self.unselected_player_ids_at_tile(coord);
+        if to_select.is_empty() {
+            return;
+        }
+        self.deselect_all();
+        self.selected_player_ids = to_select;
+        for id in &self.selected_player_ids {
+            if let Some(player) = self.players.get_mut(id) {
+                player.selected = true;
+            }
+        }
+    }
+
     fn add_players_at_tile_to_selection(&mut self, coord: &HexCoord) {
         for id in self.get_players_at_tile(coord) {
             if self.players.get(&id).is_some_and(|player| player.selected) {
@@ -1787,7 +1817,16 @@ impl GameState {
                 } else if !any_selected && clicked_friendly_stack {
                     self.select_players_at_tile(&clicked_hex);
                 } else if any_selected {
-                    self.issue_movement_orders(clicked_hex, &selected_ids, shift_held, current_time);
+                    let same_stack_tile = self.selection_includes_tile(&clicked_hex);
+                    let unselected_at_clicked = self.unselected_player_ids_at_tile(&clicked_hex);
+                    if clicked_friendly_stack
+                        && same_stack_tile
+                        && !unselected_at_clicked.is_empty()
+                    {
+                        self.select_unselected_at_tile(&clicked_hex);
+                    } else {
+                        self.issue_movement_orders(clicked_hex, &selected_ids, shift_held, current_time);
+                    }
                 }
             }
         }
