@@ -133,6 +133,38 @@ impl HexMapRenderer {
         (x + 100.0 - self.camera_x, y + 100.0 - self.camera_y)
     }
 
+    pub fn player_sprite_size(&self) -> f32 {
+        40.0 * self.zoom_level
+    }
+
+    /// Screen-space bounds for a dino sprite (matches draw_player_with_offset).
+    pub fn player_sprite_bounds(
+        &self,
+        coord: &HexCoord,
+        offset_factor: f32,
+    ) -> (f32, f32, f32, f32) {
+        let (center_x, center_y) = self.hex_to_pixel(coord);
+        let sprite_size = self.player_sprite_size();
+        let draw_x = center_x + offset_factor * sprite_size;
+        (
+            draw_x - sprite_size / 2.0,
+            center_y - sprite_size / 2.0,
+            sprite_size,
+            sprite_size,
+        )
+    }
+
+    pub fn point_in_sprite_bounds(
+        &self,
+        mouse_x: f32,
+        mouse_y: f32,
+        coord: &HexCoord,
+        offset_factor: f32,
+    ) -> bool {
+        let (x, y, w, h) = self.player_sprite_bounds(coord, offset_factor);
+        mouse_x >= x && mouse_x <= x + w && mouse_y >= y && mouse_y <= y + h
+    }
+
     fn hex_on_screen(&self, center_x: f32, center_y: f32) -> bool {
         let margin = self.hex_size * 2.0;
         center_x >= -margin
@@ -396,16 +428,17 @@ impl HexMapRenderer {
         };
         
         if let Some(sprite) = sprite {
-            // Draw the sprite centered on the hex
             let sprite_size = 40.0 * self.zoom_level;
             let x = draw_x - sprite_size / 2.0;
             let y = center_y - sprite_size / 2.0;
-            
+            let team_color = Self::nest_team_color(team);
+            let tint = Color::new(team_color.r, team_color.g, team_color.b, 1.0);
+
             draw_texture_ex(
                 *sprite,
                 x,
                 y,
-                WHITE,
+                tint,
                 DrawTextureParams {
                     dest_size: Some(Vec2::new(sprite_size, sprite_size)),
                     flip_x,

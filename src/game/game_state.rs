@@ -280,7 +280,6 @@ pub struct GameState {
     map: PangaeaMap,
     renderer: HexMapRenderer,
     keyboard_handler: KeyboardHandler,
-    mouse_handler: MouseHandler,
     players: HashMap<usize, Player>,
     selected_player_ids: Vec<usize>,
     selection_box_start: Option<(f32, f32)>,
@@ -1315,7 +1314,6 @@ impl GameState {
             map,
             renderer: HexMapRenderer::new(),
             keyboard_handler: KeyboardHandler::new(),
-            mouse_handler: MouseHandler::new(),
             players: HashMap::new(),
             selected_player_ids: Vec::new(),
             selection_box_start: None,
@@ -1409,6 +1407,56 @@ impl GameState {
             .filter(|(_, player)| player.position == *coord && player.team == self.current_team)
             .map(|(id, _)| *id)
             .collect()
+    }
+
+    /// Resolve a click to a friendly stack tile using sprite bounds (sprites are larger than hexes).
+    fn friendly_stack_at_pixel(&self, mouse_x: f32, mouse_y: f32) -> Option<HexCoord> {
+        let mut positions: HashSet<HexCoord> = HashSet::new();
+        for player in self.players.values() {
+            if player.team == self.current_team {
+                positions.insert(player.position);
+            }
+        }
+
+        let mut best: Option<(HexCoord, f32)> = None;
+
+        for position in positions {
+            let mut teams_at_pos: Vec<usize> = self
+                .players
+                .values()
+                .filter(|player| player.position == position)
+                .map(|player| player.team)
+                .collect();
+            teams_at_pos.sort_unstable();
+            teams_at_pos.dedup();
+
+            let team_index = teams_at_pos.iter().position(|team| *team == self.current_team)?;
+            let num_teams = teams_at_pos.len();
+            let offset_factor = if num_teams > 1 {
+                team_index as f32 - (num_teams - 1) as f32 / 2.0
+            } else {
+                0.0
+            };
+
+            if !self.renderer.point_in_sprite_bounds(mouse_x, mouse_y, &position, offset_factor) {
+                continue;
+            }
+
+            let (x, y, w, h) = self.renderer.player_sprite_bounds(&position, offset_factor);
+            let cx = x + w / 2.0;
+            let cy = y + h / 2.0;
+            let dist_sq = (mouse_x - cx).powi(2) + (mouse_y - cy).powi(2);
+            if best.map_or(true, |(_, best_dist)| dist_sq < best_dist) {
+                best = Some((position, dist_sq));
+            }
+        }
+
+        best.map(|(position, _)| position)
+    }
+
+    fn resolve_clicked_hex(&self, mouse_x: f32, mouse_y: f32) -> HexCoord {
+        self.friendly_stack_at_pixel(mouse_x, mouse_y)
+            .unwrap_or_else(|| MouseHandler::pixel_to_hex(&self.renderer, mouse_x, mouse_y))
     }
     
     /// All selected units for the current team (movement commands use this, not just selected_player_ids).
@@ -1799,34 +1847,33 @@ impl GameState {
         
         // Handle mouse clicks for player selection and movement
         if is_mouse_button_pressed(MouseButton::Left) {
-            if let Some(clicked_hex) = self.mouse_handler.get_mouse_hex(&self.renderer) {
-                let shift_held = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
-                
-                // Check if there are any players at the clicked tile
-                let players_at_tile = self.get_players_at_tile(&clicked_hex);
-                let selected_ids = self.command_selected_player_ids();
-                let any_selected = !selected_ids.is_empty();
-                let clicked_friendly_stack = !players_at_tile.is_empty();
+            let clicked_hex = self.resolve_clicked_hex(mouse_x, mouse_y);
+            let shift_held = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
 
-                if shift_held && clicked_friendly_stack {
-                    if any_selected {
-                        self.add_players_at_tile_to_selection(&clicked_hex);
-                    } else {
-                        self.select_players_at_tile(&clicked_hex);
-                    }
-                } else if !any_selected && clicked_friendly_stack {
+            // Check if there are any players at the clicked tile
+            let players_at_tile = self.get_players_at_tile(&clicked_hex);
+            let selected_ids = self.command_selected_player_ids();
+            let any_selected = !selected_ids.is_empty();
+            let clicked_friendly_stack = !players_at_tile.is_empty();
+
+            if shift_held && clicked_friendly_stack {
+                if any_selected {
+                    self.add_players_at_tile_to_selection(&clicked_hex);
+                } else {
                     self.select_players_at_tile(&clicked_hex);
-                } else if any_selected {
-                    let same_stack_tile = self.selection_includes_tile(&clicked_hex);
-                    let unselected_at_clicked = self.unselected_player_ids_at_tile(&clicked_hex);
-                    if clicked_friendly_stack
-                        && same_stack_tile
-                        && !unselected_at_clicked.is_empty()
-                    {
-                        self.select_unselected_at_tile(&clicked_hex);
-                    } else {
-                        self.issue_movement_orders(clicked_hex, &selected_ids, shift_held, current_time);
-                    }
+                }
+            } else if !any_selected && clicked_friendly_stack {
+                self.select_players_at_tile(&clicked_hex);
+            } else if any_selected {
+                let same_stack_tile = self.selection_includes_tile(&clicked_hex);
+                let unselected_at_clicked = self.unselected_player_ids_at_tile(&clicked_hex);
+                if clicked_friendly_stack
+                    && same_stack_tile
+                    && !unselected_at_clicked.is_empty()
+                {
+                    self.select_unselected_at_tile(&clicked_hex);
+                } else {
+                    self.issue_movement_orders(clicked_hex, &selected_ids, shift_held, current_time);
                 }
             }
         }
@@ -2026,5 +2073,4 @@ impl GameState {
 
         self.renderer.draw_game_over(self.winner, self.game_over_draw);
     }
-} 
-} 
+}

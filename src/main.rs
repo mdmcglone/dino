@@ -23,12 +23,12 @@ async fn main() {
     // Create game state
     let mut game_state = GameState::new();
     
-    // Load team sprites (player teams 0–3, Krono hazard team 4)
-    game_state.load_team_sprite(team_abilities::TREX_TEAM, "sprites/trex.png").await;
-    game_state.load_team_sprite(team_abilities::BRONTO_TEAM, "sprites/bronto.png").await;
-    game_state.load_team_sprite(team_abilities::PTERO_TEAM, "sprites/ptero.png").await;
-    game_state.load_team_sprite(team_abilities::TRICERA_TEAM, "sprites/tricera.png").await;
-    game_state.load_team_sprite(team_abilities::KRONO_TEAM, "sprites/krono.png").await;
+    // Load grayscale sprites; team color is applied at draw time
+    game_state.load_team_sprite(team_abilities::TREX_TEAM, "sprites/trex_clear.png").await;
+    game_state.load_team_sprite(team_abilities::BRONTO_TEAM, "sprites/bronto_clear.png").await;
+    game_state.load_team_sprite(team_abilities::PTERO_TEAM, "sprites/ptero_clear.png").await;
+    game_state.load_team_sprite(team_abilities::TRICERA_TEAM, "sprites/tricera_clear.png").await;
+    game_state.load_team_sprite(team_abilities::KRONO_TEAM, "sprites/krono_clear.png").await;
     
     // Main game loop
     loop {
