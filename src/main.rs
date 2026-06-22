@@ -5,7 +5,7 @@ mod input;
 mod game;
 
 use macroquad::prelude::*;
-use game::{GameState, team_abilities};
+use game::{App, AppBootstrap, AppScreen};
 
 fn window_conf() -> Conf {
     Conf {
@@ -18,29 +18,30 @@ fn window_conf() -> Conf {
     }
 }
 
+fn bootstrap_mode() -> AppBootstrap {
+    if std::env::args().any(|arg| arg == "--normal") {
+        AppBootstrap::Normal
+    } else {
+        AppBootstrap::Debug
+    }
+}
+
 #[macroquad::main(window_conf)]
 async fn main() {
-    // Create game state
-    let mut game_state = GameState::new();
-    
-    // Load grayscale sprites; team color is applied at draw time
-    game_state.load_team_sprite(team_abilities::TREX_TEAM, "sprites/trex_clear.png").await;
-    game_state.load_team_sprite(team_abilities::BRONTO_TEAM, "sprites/bronto_clear.png").await;
-    game_state.load_team_sprite(team_abilities::PTERO_TEAM, "sprites/ptero_clear.png").await;
-    game_state.load_team_sprite(team_abilities::TRICERA_TEAM, "sprites/tricera_clear.png").await;
-    game_state.load_team_sprite(team_abilities::KRONO_TEAM, "sprites/krono_clear.png").await;
-    
-    // Main game loop
+    let mut app = game::app::bootstrap_app(bootstrap_mode()).await;
+
     loop {
-        // Update game state and check for exit
-        if game_state.update() {
+        if let AppScreen::Playing(game) = app.screen_mut() {
+            if !game.sprites_loaded() {
+                App::load_sprites(game).await;
+            }
+        }
+
+        if app.update() {
             break;
         }
-        
-        // Draw everything
-        game_state.draw();
-        
-        // Next frame
+
+        app.draw();
         next_frame().await;
     }
 }

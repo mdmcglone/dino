@@ -17,6 +17,7 @@ pub struct HexMapRenderer {
     overlay_renderer: OverlayRenderer,
     ui_renderer: UIRenderer,
     team_sprites: Vec<Option<Texture2D>>,
+    team_colors: Vec<Color>,
 }
 
 impl HexMapRenderer {
@@ -31,7 +32,19 @@ impl HexMapRenderer {
             overlay_renderer: OverlayRenderer::new(),
             ui_renderer: UIRenderer::new(),
             team_sprites: vec![None; 5],
+            team_colors: Vec::new(),
         }
+    }
+
+    pub fn set_team_colors(&mut self, colors: Vec<Color>) {
+        self.team_colors = colors;
+    }
+
+    fn team_color(&self, team: usize) -> Color {
+        self.team_colors
+            .get(team)
+            .copied()
+            .unwrap_or(Color::new(0.6, 0.6, 0.6, 0.95))
     }
 
     pub async fn load_team_sprite(&mut self, team: usize, path: &str) {
@@ -270,7 +283,7 @@ impl HexMapRenderer {
     pub fn draw_ui(
         &self,
         show_controls: bool,
-        current_team: usize,
+        team_label: &str,
         population: usize,
         population_cap: usize,
         nestless_seconds_left: Option<f64>,
@@ -278,30 +291,24 @@ impl HexMapRenderer {
         self.ui_renderer.draw_ui(
             self.zoom_level,
             show_controls,
-            current_team,
+            team_label,
             population,
             population_cap,
             nestless_seconds_left,
         );
     }
 
-    pub fn draw_game_over(&self, winner: Option<usize>, draw: bool) {
-        self.ui_renderer.draw_game_over(winner, draw);
+    pub fn draw_game_over(&self, winner_label: Option<&str>, draw: bool) {
+        self.ui_renderer.draw_game_over(winner_label, draw);
     }
 
-    fn nest_team_color(team: usize) -> Color {
-        match team {
-            0 => Color::new(0.85, 0.55, 0.1, 0.95),   // T-Rex — gold
-            1 => Color::new(0.15, 0.65, 0.55, 0.95),  // Bronto — teal
-            2 => Color::new(0.45, 0.55, 0.95, 0.95),  // Ptero — sky blue
-            3 => Color::new(0.75, 0.25, 0.55, 0.95),  // Tricera — rose
-            4 => Color::new(0.35, 0.15, 0.45, 0.95),  // Krono — deep purple
-            _ => Color::new(0.6, 0.6, 0.6, 0.95),
-        }
+    fn nest_team_color(&self, team: usize) -> Color {
+        let base = self.team_color(team);
+        Color::new(base.r, base.g, base.b, 0.95)
     }
 
     pub fn draw_nest_farm_zone(&self, nest: &Nest, visible: &HashSet<HexCoord>) {
-        let team_color = Self::nest_team_color(nest.team);
+        let team_color = self.nest_team_color(nest.team);
         let border_color = Color::new(team_color.r, team_color.g, team_color.b, 1.0);
         let thickness = 5.0 * self.zoom_level;
         let farm_within = nest.farm_within();
@@ -374,7 +381,7 @@ impl HexMapRenderer {
         let bar_x = center_x - bar_width / 2.0;
         let bar_y = center_y + self.hex_size * 0.55;
         let progress = (nest.food / food_cap).clamp(0.0, 1.0);
-        let fill_color = Self::nest_team_color(nest.team);
+        let fill_color = self.nest_team_color(nest.team);
 
         draw_rectangle(bar_x, bar_y, bar_width, bar_height, Color::new(0.15, 0.15, 0.15, 0.75));
         if progress > 0.0 {
@@ -398,7 +405,7 @@ impl HexMapRenderer {
         let progress = (nest.siege_progress / crate::game::nest::SIEGE_DINO_SECONDS_TARGET).clamp(0.0, 1.0);
         let fill_color = nest
             .siege_team
-            .map(Self::nest_team_color)
+            .map(|team| self.nest_team_color(team))
             .unwrap_or(Color::new(0.8, 0.2, 0.2, 0.95));
 
         draw_rectangle(bar_x, bar_y, bar_width, bar_height, Color::new(0.15, 0.15, 0.15, 0.75));
@@ -408,42 +415,45 @@ impl HexMapRenderer {
         draw_rectangle_lines(bar_x, bar_y, bar_width, bar_height, 1.5, Color::new(1.0, 0.85, 0.3, 0.9));
     }
 
-    pub fn draw_player(&self, coord: &HexCoord, team: usize) {
-        self.draw_player_with_offset(coord, team, 0.0, false);
+    pub fn draw_player(&self, coord: &HexCoord, dino_type: usize, tint: Color) {
+        self.draw_player_with_offset(coord, dino_type, tint, 0.0, false);
     }
     
-    pub fn draw_player_with_offset(&self, coord: &HexCoord, team: usize, offset_factor: f32, flip_x: bool) {
+    pub fn draw_player_with_offset(
+        &self,
+        coord: &HexCoord,
+        dino_type: usize,
+        tint: Color,
+        offset_factor: f32,
+        flip_x: bool,
+    ) {
         let (center_x, center_y) = self.hex_to_pixel(coord);
-        
-        // Apply horizontal offset for side-by-side battles (half sprite width from center)
+
         let sprite_size = 40.0 * self.zoom_level;
         let offset_x = offset_factor * sprite_size;
         let draw_x = center_x + offset_x;
-        
-        // Get sprite for this team
-        let sprite = if team < self.team_sprites.len() {
-            self.team_sprites[team].as_ref()
+
+        let sprite = if dino_type < self.team_sprites.len() {
+            self.team_sprites[dino_type].as_ref()
         } else {
             None
         };
-        
+
         if let Some(sprite) = sprite {
-            let sprite_size = 40.0 * self.zoom_level;
             let x = draw_x - sprite_size / 2.0;
             let y = center_y - sprite_size / 2.0;
-            let team_color = Self::nest_team_color(team);
-            let tint = Color::new(team_color.r, team_color.g, team_color.b, 1.0);
+            let sprite_tint = Color::new(tint.r, tint.g, tint.b, 1.0);
 
             draw_texture_ex(
                 *sprite,
                 x,
                 y,
-                tint,
+                sprite_tint,
                 DrawTextureParams {
                     dest_size: Some(Vec2::new(sprite_size, sprite_size)),
                     flip_x,
                     ..Default::default()
-                }
+                },
             );
         } else {
             // Fallback to stick figure if sprite not loaded
@@ -712,7 +722,7 @@ impl HexMapRenderer {
         let (center_x, center_y) = self.hex_to_pixel(&nest.position);
         let arm_length = self.hex_size * 0.45;
         let thickness = 3.0 * self.zoom_level;
-        let color = Self::nest_team_color(nest.team);
+        let color = self.nest_team_color(nest.team);
 
         // Six-point asterisk aligned with the hex grid
         for i in 0..6 {

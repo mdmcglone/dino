@@ -1,7 +1,6 @@
 // UI rendering functionality
 
 use macroquad::prelude::*;
-use crate::game::team_abilities;
 
 pub struct UIRenderer;
 
@@ -14,7 +13,7 @@ impl UIRenderer {
         &self,
         zoom_level: f32,
         show_controls: bool,
-        current_team: usize,
+        team_label: &str,
         population: usize,
         population_cap: usize,
         nestless_seconds_left: Option<f64>,
@@ -79,12 +78,7 @@ impl UIRenderer {
         let zoom_text = format!("Zoom: {:.0}%", zoom_level * 100.0);
         draw_text(&zoom_text, screen_width() - 200.0, 30.0, 20.0, control_color);
 
-        let pop_text = format!(
-            "{} Population: {}/{}",
-            team_abilities::team_name(current_team),
-            population,
-            population_cap
-        );
+        let pop_text = format!("{} Population: {}/{}", team_label, population, population_cap);
         draw_text(&pop_text, screen_width() - 280.0, 55.0, 20.0, control_color);
 
         if let Some(seconds_left) = nestless_seconds_left {
@@ -99,8 +93,8 @@ impl UIRenderer {
         }
     }
 
-    pub fn draw_game_over(&self, winner: Option<usize>, draw: bool) {
-        if winner.is_none() && !draw {
+    pub fn draw_game_over(&self, winner_label: Option<&str>, draw: bool) {
+        if winner_label.is_none() && !draw {
             return;
         }
 
@@ -115,7 +109,7 @@ impl UIRenderer {
         let title = if draw {
             "Draw - no teams remain".to_string()
         } else {
-            format!("{} wins!", team_abilities::team_name(winner.unwrap()))
+            format!("{} wins!", winner_label.unwrap())
         };
 
         let font_size = 48.0;

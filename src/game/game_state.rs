@@ -4,7 +4,7 @@ use macroquad::prelude::*;
 use crate::maps::{PangaeaMap, Map, TerrainType};
 use crate::rendering::HexMapRenderer;
 use crate::input::{KeyboardHandler, MouseHandler};
-use crate::game::{Nest, nest::{NEST_FARM_RADIUS, SIEGE_DINO_SECONDS_TARGET}, spawn_placement, team_abilities};
+use crate::game::{Nest, nest::{NEST_FARM_RADIUS, SIEGE_DINO_SECONDS_TARGET}, spawn_placement, team_abilities, team_setup::{self, MatchConfig, TeamSetup}};
 use crate::core::{HexCoord, OffsetFarmZone};
 use ::rand::prelude::*;
 use ::rand::seq::SliceRandom;
@@ -14,7 +14,6 @@ use std::cmp::Ordering;
 const MEMBERS_PER_TEAM: usize = 3;
 const STARTING_DINOS_PER_TEAM: usize = MEMBERS_PER_TEAM + 1;
 const MIN_NEST_DISTANCE: i32 = 5;
-const PLAYER_TEAMS: usize = team_abilities::PLAYER_TEAMS;
 const KRONO_TEAM: usize = team_abilities::KRONO_TEAM;
 const KRONO_HAZARD_COUNT: usize = 10;
 const KRONO_CYCLE_MULTIPLIER: f64 = 0.5;
@@ -299,9 +298,103 @@ pub struct GameState {
     nestless_since: HashMap<usize, f64>,
     winner: Option<usize>,
     game_over_draw: bool,
+    team_setups: Vec<TeamSetup>,
+    sprites_loaded: bool,
 }
 
 impl GameState {
+    fn dino_for(&self, team_slot: usize) -> usize {
+        self.team_setups
+            .get(team_slot)
+            .map(|setup| setup.dino_type)
+            .unwrap_or(team_slot)
+    }
+
+    fn color_for(&self, team_slot: usize) -> Color {
+        self.team_setups
+            .get(team_slot)
+            .map(|setup| setup.color)
+            .unwrap_or_else(|| team_setup::default_team_color(team_slot))
+    }
+
+    fn team_label(&self, team_slot: usize) -> String {
+        team_abilities::team_name(self.dino_for(team_slot)).to_string()
+    }
+
+    fn winner_label(&self) -> String {
+        self.winner
+            .map(|team| self.team_label(team))
+            .unwrap_or_default()
+    }
+
+    fn sync_renderer_team_colors(&mut self) {
+        let mut colors: Vec<Color> = self.team_setups.iter().map(|setup| setup.color).collect();
+        colors.push(team_setup::krono_team_color());
+        self.renderer.set_team_colors(colors);
+    }
+
+    pub fn sprites_loaded(&self) -> bool {
+        self.sprites_loaded
+    }
+
+    pub fn mark_sprites_loaded(&mut self) {
+        self.sprites_loaded = true;
+    }
+
+    fn is_walkable_for_dino(&self, coord: &HexCoord, dino_type: usize) -> bool {
+        if !self.is_on_map(coord) {
+            return false;
+        }
+        if team_abilities::can_fly_over_terrain(dino_type) {
+            return true;
+        }
+        match self.map.get_tile(coord) {
+            TerrainType::Mountain => false,
+            TerrainType::Water => dino_type == KRONO_TEAM,
+            TerrainType::ShallowWater => true,
+            _ => dino_type != KRONO_TEAM,
+        }
+    }
+
+    fn movement_step_duration_for_dino(&self, from: &HexCoord, to: &HexCoord, dino_type: usize) -> f64 {
+        let crossing_rough_boundary =
+            self.map.get_tile(from).is_rough() != self.map.get_tile(to).is_rough();
+        let mut duration = if crossing_rough_boundary
+            && !team_abilities::ignores_rough_terrain_movement_penalty(dino_type)
+        {
+            MOVEMENT_TIME * ROUGH_TERRAIN_MOVEMENT_MULTIPLIER
+        } else {
+            MOVEMENT_TIME
+        };
+        if dino_type == KRONO_TEAM {
+            duration *= KRONO_MOVEMENT_MULTIPLIER;
+        }
+        duration
+    }
+
+    fn build_step_durations_for_dino(
+        &self,
+        origin: HexCoord,
+        path: &[HexCoord],
+        dino_type: usize,
+    ) -> Vec<f64> {
+        let mut durations = Vec::with_capacity(path.len());
+        let mut from = origin;
+        for step in path {
+            durations.push(self.movement_step_duration_for_dino(&from, step, dino_type));
+            from = *step;
+        }
+        durations
+    }
+
+    fn is_walkable_for_team(&self, coord: &HexCoord, team: usize) -> bool {
+        if Self::is_hazard_team(team) {
+            self.is_walkable_for_dino(coord, KRONO_TEAM)
+        } else {
+            self.is_walkable_for_dino(coord, self.dino_for(team))
+        }
+    }
+
     fn is_walkable_land(&self, coord: &HexCoord) -> bool {
         if !self.is_on_map(coord) {
             return false;
@@ -316,53 +409,16 @@ impl GameState {
         self.map.get_tiles().contains_key(coord)
     }
 
-    fn is_walkable_for_team(&self, coord: &HexCoord, team: usize) -> bool {
-        if !self.is_on_map(coord) {
-            return false;
-        }
-        if team_abilities::can_fly_over_terrain(team) {
-            return true;
-        }
-        match self.map.get_tile(coord) {
-            TerrainType::Mountain => false,
-            TerrainType::Water => team == KRONO_TEAM,
-            TerrainType::ShallowWater => true,
-            _ => team != KRONO_TEAM,
-        }
+    fn build_step_durations(&self, origin: HexCoord, path: &[HexCoord], team_slot: usize) -> Vec<f64> {
+        self.build_step_durations_for_dino(origin, path, self.dino_for(team_slot))
     }
 
-    fn movement_step_duration(&self, from: &HexCoord, to: &HexCoord, team: usize) -> f64 {
-        let crossing_rough_boundary =
-            self.map.get_tile(from).is_rough() != self.map.get_tile(to).is_rough();
-        let mut duration = if crossing_rough_boundary
-            && !team_abilities::ignores_rough_terrain_movement_penalty(team)
-        {
-            MOVEMENT_TIME * ROUGH_TERRAIN_MOVEMENT_MULTIPLIER
-        } else {
-            MOVEMENT_TIME
-        };
-        if Self::is_hazard_team(team) {
-            duration *= KRONO_MOVEMENT_MULTIPLIER;
-        }
-        duration
-    }
-
-    fn build_step_durations(&self, origin: HexCoord, path: &[HexCoord], team: usize) -> Vec<f64> {
-        let mut durations = Vec::with_capacity(path.len());
-        let mut from = origin;
-        for step in path {
-            durations.push(self.movement_step_duration(&from, step, team));
-            from = *step;
-        }
-        durations
-    }
-
-    fn is_player_team(team: usize) -> bool {
-        team < PLAYER_TEAMS
+    fn is_player_team(&self, team: usize) -> bool {
+        team < self.num_teams
     }
 
     fn standing_player_teams(&self) -> Vec<usize> {
-        (0..PLAYER_TEAMS)
+        (0..self.num_teams)
             .filter(|team| !self.eliminated_teams.contains(team))
             .collect()
     }
@@ -376,7 +432,7 @@ impl GameState {
     }
 
     fn eliminate_team(&mut self, team: usize, reason: &str) {
-        if !Self::is_player_team(team) || !self.eliminated_teams.insert(team) {
+        if !self.is_player_team(team) || !self.eliminated_teams.insert(team) {
             return;
         }
         self.players.retain(|_, player| player.team != team);
@@ -388,7 +444,7 @@ impl GameState {
                 self.deselect_all();
             }
         }
-        println!("Team {} eliminated — {}", team_abilities::team_name(team), reason);
+        println!("Team {} eliminated — {}", self.team_label(team), reason);
     }
 
     fn update_elimination_and_victory(&mut self, current_time: f64) {
@@ -396,7 +452,7 @@ impl GameState {
             return;
         }
 
-        for team in 0..PLAYER_TEAMS {
+        for team in 0..self.num_teams {
             if self.eliminated_teams.contains(&team) {
                 continue;
             }
@@ -424,7 +480,7 @@ impl GameState {
         let standing = self.standing_player_teams();
         if standing.len() == 1 {
             self.winner = Some(standing[0]);
-            println!("{} wins!", team_abilities::team_name(standing[0]));
+            println!("{} wins!", self.team_label(standing[0]));
         } else if standing.is_empty() {
             self.game_over_draw = true;
             println!("Draw — all teams eliminated");
@@ -469,7 +525,7 @@ impl GameState {
         if Self::is_hazard_team(team) {
             cycle *= KRONO_CYCLE_MULTIPLIER;
         } else {
-            cycle *= team_abilities::combat_cycle_multiplier(team);
+            cycle *= team_abilities::combat_cycle_multiplier(self.dino_for(team));
         }
         if !self.map.get_tile(&battle_coord).is_rough() {
             return cycle;
@@ -637,12 +693,12 @@ impl GameState {
             if attacker_count > 0 {
                 delta += attacker_count as f32
                     * dt as f32
-                    * team_abilities::siege_attack_rate_multiplier(attacker_team) as f32;
+                    * team_abilities::siege_attack_rate_multiplier(self.dino_for(attacker_team)) as f32;
             }
             if defender_count > 0 {
                 delta -= defender_count as f32
                     * dt as f32
-                    * team_abilities::siege_repair_rate_multiplier(nest_team) as f32;
+                    * team_abilities::siege_repair_rate_multiplier(self.dino_for(nest_team)) as f32;
             }
 
             if delta == 0.0 {
@@ -840,7 +896,7 @@ impl GameState {
     }
 
     fn team_population_cap(&self, team: usize) -> usize {
-        self.team_nest_count(team) * team_abilities::population_per_nest(team)
+        self.team_nest_count(team) * team_abilities::population_per_nest(self.dino_for(team))
     }
 
     fn can_spawn_dino(&self, team: usize) -> bool {
@@ -1290,26 +1346,29 @@ impl GameState {
         }
     }
     
-    pub fn new() -> Self {
+    pub fn new_debug() -> Self {
+        Self::new_with_config(MatchConfig::debug_default())
+    }
+
+    pub fn new_with_config(config: MatchConfig) -> Self {
         println!("\n=== PANGAEA ===");
         println!("Generating supercontinent...");
-        
+
         let map = PangaeaMap::new();
-        
-        // Find random land tiles for spawning characters (exclude water and mountains)
         let mut rng = thread_rng();
-        let walkable: HashSet<HexCoord> = map.get_tiles()
+        let walkable: HashSet<HexCoord> = map
+            .get_tiles()
             .iter()
             .filter(|(_, terrain)| {
-                **terrain != TerrainType::Water 
-                && **terrain != TerrainType::ShallowWater 
-                && **terrain != TerrainType::Mountain
+                **terrain != TerrainType::Water
+                    && **terrain != TerrainType::ShallowWater
+                    && **terrain != TerrainType::Mountain
             })
             .map(|(coord, _)| *coord)
             .collect();
-        
-        // Spawn each team at balanced positions across the map
-        let num_teams = PLAYER_TEAMS;
+
+        let num_teams = config.num_teams();
+        let team_setups = config.teams.clone();
         let mut game_state = Self {
             map,
             renderer: HexMapRenderer::new(),
@@ -1333,7 +1392,10 @@ impl GameState {
             nestless_since: HashMap::new(),
             winner: None,
             game_over_draw: false,
+            team_setups,
+            sprites_loaded: false,
         };
+        game_state.sync_renderer_team_colors();
 
         let (players, nests, spawn_centers) = game_state.spawn_initial_teams(&walkable, &mut rng);
         game_state.players = players;
@@ -1341,22 +1403,32 @@ impl GameState {
         game_state.spawn_krono_hazards(&mut rng);
 
         println!("\nMap generated!");
-        for (team, center) in spawn_centers {
+        for (team, center) in &spawn_centers {
             println!(
-                "{} starts with {} dinos near ({}, {}) — place first nest with P (costs 1)",
-                team_abilities::team_name(team), STARTING_DINOS_PER_TEAM, center.q, center.r,
+                "Team {} ({}) starts with {} dinos near ({}, {}) — place first nest with P (costs 1)",
+                team + 1,
+                game_state.team_label(*team),
+                STARTING_DINOS_PER_TEAM,
+                center.q,
+                center.r,
             );
         }
         println!(
             "{} Kronos spawned in the oceans — avoid shallow water!",
             KRONO_HAZARD_COUNT,
         );
+        game_state.print_controls_help();
+
+        game_state
+    }
+
+    fn print_controls_help(&self) {
         println!("\n=== CONTROLS ===");
         println!("Left-click: Select character(s) / Move selected characters");
         println!("Right-click & drag: Rectangle select multiple characters");
         println!("SHIFT + Click: Queue multiple destinations");
         println!("P: Place nest (costs 1, then 5, 10, 15...)");
-        println!("Space: Cycle between teams (current: Team {})", 0);
+        println!("Space: Cycle between teams (current: Team 1)");
         println!("\n=== SPLITTING STACKS ===");
         println!("E: Select half of stack (rounded up)");
         println!("R: Select just one character");
@@ -1366,11 +1438,17 @@ impl GameState {
         println!("+/-: Zoom in/out");
         println!("0: Reset zoom");
         println!("\n=== BATTLE ===");
-        println!("Movement: {:.1}s per tile ({:.2}s when entering/exiting rough terrain)", MOVEMENT_TIME, MOVEMENT_TIME * ROUGH_TERRAIN_MOVEMENT_MULTIPLIER);
+        println!(
+            "Movement: {:.1}s per tile ({:.2}s when entering/exiting rough terrain)",
+            MOVEMENT_TIME,
+            MOVEMENT_TIME * ROUGH_TERRAIN_MOVEMENT_MULTIPLIER
+        );
         println!("Base battle cycle: {:.1} second(s) between kills", BASE_BATTLE_CYCLE);
         println!("Retreat time: {:.1} second(s) minimum in combat", RETREAT_TIME);
-        
-        game_state
+    }
+
+    pub fn new() -> Self {
+        Self::new_debug()
     }
     
     pub async fn load_team_sprite(&mut self, team: usize, path: &str) {
@@ -1394,7 +1472,7 @@ impl GameState {
         for _ in 0..self.num_teams {
             self.current_team = (self.current_team + 1) % self.num_teams;
             if !self.eliminated_teams.contains(&self.current_team) {
-                println!("Switched to {}", team_abilities::team_name(self.current_team));
+                println!("Switched to {}", self.team_label(self.current_team));
                 return;
             }
         }
@@ -2019,7 +2097,14 @@ impl GameState {
                 };
                 
                 let flip_x = is_battle && offset_factor < 0.0;
-                self.renderer.draw_player_with_offset(position, *team_id, offset_factor, flip_x);
+                let dino_type = self.dino_for(*team_id);
+                self.renderer.draw_player_with_offset(
+                    position,
+                    dino_type,
+                    self.color_for(*team_id),
+                    offset_factor,
+                    flip_x,
+                );
                 
                 // Draw count for this team if more than one
                 if team_players.len() > 1 {
@@ -2065,12 +2150,18 @@ impl GameState {
         // Draw UI
         self.renderer.draw_ui(
             self.show_controls,
-            self.current_team,
+            &self.team_label(self.current_team),
             self.team_dino_count(self.current_team),
             self.team_population_cap(self.current_team),
             self.nestless_seconds_remaining(self.current_team, current_time),
         );
 
-        self.renderer.draw_game_over(self.winner, self.game_over_draw);
+        let winner_label = if self.winner.is_some() {
+            Some(self.winner_label())
+        } else {
+            None
+        };
+        self.renderer
+            .draw_game_over(winner_label.as_deref(), self.game_over_draw);
     }
 }
