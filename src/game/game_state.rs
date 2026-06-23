@@ -1,7 +1,7 @@
 // Game state management
 
 use macroquad::prelude::*;
-use crate::maps::{PangaeaMap, Map, TerrainType};
+use crate::maps::{Map, TerrainType, WorldMap};
 use crate::rendering::HexMapRenderer;
 use crate::input::{KeyboardHandler, MouseHandler};
 use crate::game::{Nest, nest::{NEST_FARM_RADIUS, SIEGE_DINO_SECONDS_TARGET}, spawn_placement, team_abilities, team_setup::{self, MatchConfig, TeamSetup}};
@@ -276,7 +276,7 @@ impl Player {
 }
 
 pub struct GameState {
-    map: PangaeaMap,
+    map: WorldMap,
     renderer: HexMapRenderer,
     keyboard_handler: KeyboardHandler,
     players: HashMap<usize, Player>,
@@ -1351,10 +1351,11 @@ impl GameState {
     }
 
     pub fn new_with_config(config: MatchConfig) -> Self {
+        let map_label = config.map_kind.label();
         println!("\n=== PANGAEA ===");
-        println!("Generating supercontinent...");
+        println!("Generating {map_label} map...");
 
-        let map = PangaeaMap::new();
+        let map = WorldMap::generate(config.map_kind);
         let mut rng = thread_rng();
         let walkable: HashSet<HexCoord> = map
             .get_tiles()
@@ -2098,10 +2099,15 @@ impl GameState {
                 
                 let flip_x = is_battle && offset_factor < 0.0;
                 let dino_type = self.dino_for(*team_id);
+                let tint = if Self::is_hazard_team(*team_id) {
+                    WHITE
+                } else {
+                    self.color_for(*team_id)
+                };
                 self.renderer.draw_player_with_offset(
                     position,
                     dino_type,
-                    self.color_for(*team_id),
+                    tint,
                     offset_factor,
                     flip_x,
                 );

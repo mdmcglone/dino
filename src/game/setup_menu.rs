@@ -1,4 +1,5 @@
 use macroquad::prelude::*;
+use crate::maps::MapKind;
 use super::team_setup::{
     self, MatchConfig, TeamSetup, MAX_TEAMS, MIN_TEAMS, PLAYER_DINO_COUNT,
 };
@@ -6,8 +7,10 @@ use super::team_setup::{
 const PANEL_X: f32 = 80.0;
 const PANEL_W: f32 = 1240.0;
 const ROW_HEIGHT: f32 = 88.0;
-const ROW_START_Y: f32 = 210.0;
+const ROW_START_Y: f32 = 248.0;
 const BTN_H: f32 = 44.0;
+const TEAM_ROW_Y: f32 = 132.0;
+const MAP_ROW_Y: f32 = 188.0;
 
 const TEAM_COUNT_OPTIONS: usize = MAX_TEAMS - MIN_TEAMS + 1;
 
@@ -16,6 +19,8 @@ struct Layout {
     team_minus: Rect,
     team_plus: Rect,
     team_count_buttons: [Rect; TEAM_COUNT_OPTIONS],
+    map_pangaea: Rect,
+    map_random: Rect,
     start: Rect,
     rows: Vec<RowLayout>,
     color_grid: Option<ColorGridLayout>,
@@ -50,6 +55,7 @@ impl Rect {
 pub struct SetupMenu {
     num_teams: usize,
     teams: Vec<TeamSetup>,
+    map_kind: MapKind,
     color_picker_for: Option<usize>,
 }
 
@@ -66,6 +72,7 @@ impl SetupMenu {
         Self {
             num_teams,
             teams: (0..num_teams).map(TeamSetup::default_for_slot).collect(),
+            map_kind: MapKind::Pangaea,
             color_picker_for: None,
         }
     }
@@ -110,6 +117,7 @@ impl SetupMenu {
         if layout.start.contains(mx, my) {
             return SetupAction::Start(MatchConfig {
                 teams: self.teams[..self.num_teams].to_vec(),
+                map_kind: self.map_kind,
             });
         }
         if layout.team_minus.contains(mx, my) && self.num_teams > MIN_TEAMS {
@@ -129,6 +137,15 @@ impl SetupMenu {
                 self.sync_team_rows();
                 return SetupAction::None;
             }
+        }
+
+        if layout.map_pangaea.contains(mx, my) {
+            self.map_kind = MapKind::Pangaea;
+            return SetupAction::None;
+        }
+        if layout.map_random.contains(mx, my) {
+            self.map_kind = MapKind::Random;
+            return SetupAction::None;
         }
 
         for (team_index, row) in layout.rows.iter().enumerate() {
@@ -170,7 +187,7 @@ impl SetupMenu {
             Color::new(0.95, 0.92, 0.85, 1.0),
         );
         draw_text(
-            "Set team count, pick a dino, then click the color square to choose a team color.",
+            "Set team count, map type, pick a dino, then click the color square to choose a team color.",
             PANEL_X,
             100.0,
             20.0,
@@ -187,7 +204,7 @@ impl SetupMenu {
         draw_text(
             "Number of teams",
             PANEL_X,
-            148.0,
+            TEAM_ROW_Y + 6.0,
             22.0,
             Color::new(0.85, 0.88, 0.92, 1.0),
         );
@@ -200,6 +217,26 @@ impl SetupMenu {
             let hover = rect.contains(mx, my);
             draw_count_chip(count, rect, selected, hover);
         }
+
+        draw_text(
+            "Map type",
+            PANEL_X,
+            MAP_ROW_Y + 6.0,
+            22.0,
+            Color::new(0.85, 0.88, 0.92, 1.0),
+        );
+        draw_map_chip(
+            MapKind::Pangaea,
+            &layout.map_pangaea,
+            self.map_kind == MapKind::Pangaea,
+            layout.map_pangaea.contains(mx, my),
+        );
+        draw_map_chip(
+            MapKind::Random,
+            &layout.map_random,
+            self.map_kind == MapKind::Random,
+            layout.map_random.contains(mx, my),
+        );
 
         draw_rectangle(
             PANEL_X,
@@ -290,13 +327,13 @@ impl SetupMenu {
         };
         let team_minus = Rect {
             x: PANEL_X + 200.0,
-            y: 132.0,
+            y: TEAM_ROW_Y,
             w: BTN_H,
             h: BTN_H,
         };
         let team_plus = Rect {
             x: PANEL_X + 260.0,
-            y: 132.0,
+            y: TEAM_ROW_Y,
             w: BTN_H,
             h: BTN_H,
         };
@@ -304,11 +341,23 @@ impl SetupMenu {
         for index in 0..TEAM_COUNT_OPTIONS {
             team_count_buttons[index] = Rect {
                 x: PANEL_X + 340.0 + index as f32 * 72.0,
-                y: 132.0,
+                y: TEAM_ROW_Y,
                 w: 60.0,
                 h: BTN_H,
             };
         }
+        let map_pangaea = Rect {
+            x: PANEL_X + 200.0,
+            y: MAP_ROW_Y,
+            w: 140.0,
+            h: BTN_H,
+        };
+        let map_random = Rect {
+            x: PANEL_X + 360.0,
+            y: MAP_ROW_Y,
+            w: 140.0,
+            h: BTN_H,
+        };
         let start = Rect {
             x: screen_width() / 2.0 - 130.0,
             y: screen_height() - 88.0,
@@ -395,6 +444,8 @@ impl SetupMenu {
             team_minus,
             team_plus,
             team_count_buttons,
+            map_pangaea,
+            map_random,
             start,
             rows,
             color_grid,
@@ -469,6 +520,39 @@ fn draw_button(label: &str, rect: &Rect, hover: bool, primary: bool) {
         Color::new(0.55, 0.62, 0.72, 1.0),
     );
     let font_size = if primary { 24.0 } else { 20.0 };
+    let text_width = measure_text(label, None, font_size as u16, 1.0).width;
+    draw_text(
+        label,
+        rect.x + rect.w / 2.0 - text_width / 2.0,
+        rect.y + rect.h / 2.0 + font_size * 0.35,
+        font_size,
+        Color::new(0.95, 0.95, 0.95, 1.0),
+    );
+}
+
+fn draw_map_chip(kind: MapKind, rect: &Rect, selected: bool, hover: bool) {
+    let bg = if selected {
+        Color::new(0.25, 0.45, 0.7, 1.0)
+    } else if hover {
+        Color::new(0.22, 0.28, 0.36, 1.0)
+    } else {
+        Color::new(0.16, 0.18, 0.22, 1.0)
+    };
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h, bg);
+    draw_rectangle_lines(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        2.0,
+        if selected {
+            Color::new(0.85, 0.9, 1.0, 1.0)
+        } else {
+            Color::new(0.4, 0.45, 0.52, 1.0)
+        },
+    );
+    let label = kind.label();
+    let font_size = 20.0;
     let text_width = measure_text(label, None, font_size as u16, 1.0).width;
     draw_text(
         label,

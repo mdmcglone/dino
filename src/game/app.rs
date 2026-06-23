@@ -53,6 +53,8 @@ impl App {
             .await;
         game.load_team_sprite(team_abilities::TRICERA_TEAM, "sprites/tricera_clear.png")
             .await;
+        game.load_team_sprite(team_abilities::KRONO_TEAM, "sprites/krono.png")
+            .await;
         game.mark_sprites_loaded();
     }
 
