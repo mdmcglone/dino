@@ -1455,6 +1455,20 @@ impl GameState {
     pub async fn load_team_sprite(&mut self, team: usize, path: &str) {
         self.renderer.load_team_sprite(team, path).await;
     }
+
+    pub async fn load_all_sprites(&mut self) {
+        self.load_team_sprite(team_abilities::TREX_TEAM, "sprites/trex_clear.png")
+            .await;
+        self.load_team_sprite(team_abilities::BRONTO_TEAM, "sprites/bronto_clear.png")
+            .await;
+        self.load_team_sprite(team_abilities::PTERO_TEAM, "sprites/ptero_clear.png")
+            .await;
+        self.load_team_sprite(team_abilities::TRICERA_TEAM, "sprites/tricera_clear.png")
+            .await;
+        self.load_team_sprite(team_abilities::KRONO_TEAM, "sprites/krono.png")
+            .await;
+        self.mark_sprites_loaded();
+    }
     
     /// Add a new player to the game at the specified position
     pub fn add_player(&mut self, team: usize, position: HexCoord) -> usize {

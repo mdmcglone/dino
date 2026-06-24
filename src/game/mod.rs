@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod game_state;
+pub mod loading_screen;
 pub mod nest;
 pub mod setup_menu;
 pub mod spawn_placement;

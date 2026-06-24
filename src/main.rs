@@ -31,17 +31,19 @@ async fn main() {
     let mut app = game::app::bootstrap_app(bootstrap_mode()).await;
 
     loop {
+        if app.update() {
+            break;
+        }
+
+        app.draw();
+        app.tick_loading().await;
+
         if let AppScreen::Playing(game) = app.screen_mut() {
             if !game.sprites_loaded() {
                 App::load_sprites(game).await;
             }
         }
 
-        if app.update() {
-            break;
-        }
-
-        app.draw();
         next_frame().await;
     }
 }

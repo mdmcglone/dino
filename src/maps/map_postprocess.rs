@@ -69,46 +69,86 @@ pub fn traversible_components(
     components
 }
 
-fn carve_traversible_path(
+const BRIDGE_WATER_RADIUS: i32 = 2;
+
+fn bridge_tile_for(terrain: TerrainType) -> Option<TerrainType> {
+    match terrain {
+        TerrainType::Water => Some(TerrainType::ShallowWater),
+        TerrainType::Mountain => Some(TerrainType::Grass),
+        _ => None,
+    }
+}
+
+fn in_bounds(coord: &HexCoord, width: i32, height: i32) -> bool {
+    coord.q >= 0 && coord.q < width && coord.r >= 0 && coord.r < height
+}
+
+fn collect_greedy_path(from: HexCoord, to: HexCoord, width: i32, height: i32) -> Vec<HexCoord> {
+    let mut path = vec![from];
+    let mut current = from;
+    let mut guard = 0;
+
+    while current != to && guard < (width * height * 2) as usize {
+        guard += 1;
+        let mut best = None;
+        let mut best_dist = current.distance(&to);
+        for neighbor in current.offset_neighbors() {
+            if !in_bounds(&neighbor, width, height) {
+                continue;
+            }
+            let dist = neighbor.distance(&to);
+            if dist < best_dist {
+                best_dist = dist;
+                best = Some(neighbor);
+            }
+        }
+        let Some(next) = best else { break };
+        current = next;
+        path.push(current);
+    }
+
+    path
+}
+
+fn tiles_around_path(path: &[HexCoord], radius: i32, width: i32, height: i32) -> HashSet<HexCoord> {
+    let mut tiles = HashSet::new();
+    for &center in path {
+        let mut queue = VecDeque::from([(center, 0)]);
+        let mut visited = HashSet::from([center]);
+        while let Some((coord, dist)) = queue.pop_front() {
+            if dist <= radius {
+                tiles.insert(coord);
+            }
+            if dist >= radius {
+                continue;
+            }
+            for neighbor in coord.offset_neighbors() {
+                if !in_bounds(&neighbor, width, height) || !visited.insert(neighbor) {
+                    continue;
+                }
+                queue.push_back((neighbor, dist + 1));
+            }
+        }
+    }
+    tiles
+}
+
+fn carve_bridge(
     tiles: &mut HashMap<HexCoord, TerrainType>,
     from: HexCoord,
     to: HexCoord,
     width: i32,
     height: i32,
 ) {
-    let mut current = from;
-    let mut guard = 0;
+    let path = collect_greedy_path(from, to, width, height);
+    let footprint = tiles_around_path(&path, BRIDGE_WATER_RADIUS, width, height);
 
-    while current != to && guard < (width * height * 2) as usize {
-        guard += 1;
-        if !is_traversible(get_tile(tiles, &current)) {
-            tiles.insert(current, TerrainType::Grass);
+    for coord in footprint {
+        let terrain = get_tile(tiles, &coord);
+        if let Some(bridge) = bridge_tile_for(terrain) {
+            tiles.insert(coord, bridge);
         }
-
-        let mut best = current;
-        let mut best_dist = current.distance(&to);
-        for neighbor in current.offset_neighbors() {
-            if neighbor.q < 0
-                || neighbor.q >= width
-                || neighbor.r < 0
-                || neighbor.r >= height
-            {
-                continue;
-            }
-            let dist = neighbor.distance(&to);
-            if dist < best_dist {
-                best_dist = dist;
-                best = neighbor;
-            }
-        }
-
-        if best == current {
-            break;
-        }
-        current = best;
     }
-
-    tiles.insert(to, TerrainType::Grass);
 }
 
 fn closest_pair_between(
@@ -131,7 +171,7 @@ fn closest_pair_between(
     best_pair
 }
 
-/// Carve grass land bridges so every traversible tile belongs to one connected region.
+/// Connect isolated traversible regions with shallow-water channels (over ocean) or grass (through mountains).
 pub fn ensure_traversible_connectivity(
     tiles: &mut HashMap<HexCoord, TerrainType>,
     width: i32,
@@ -150,7 +190,7 @@ pub fn ensure_traversible_connectivity(
             .min_by_key(|(a, b)| a.distance(b))
             .unwrap();
 
-        carve_traversible_path(tiles, from, to, width, height);
+        carve_bridge(tiles, from, to, width, height);
     }
 }
 

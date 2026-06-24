@@ -1,11 +1,12 @@
 use macroquad::prelude::*;
 use super::game_state::GameState;
+use super::loading_screen::LoadingScreen;
 use super::setup_menu::{SetupAction, SetupMenu};
-use super::team_abilities;
 
 pub enum AppScreen {
     Launcher,
     Setup(SetupMenu),
+    Loading(LoadingScreen),
     Playing(GameState),
 }
 
@@ -45,17 +46,19 @@ impl App {
     }
 
     pub async fn load_sprites(game: &mut GameState) {
-        game.load_team_sprite(team_abilities::TREX_TEAM, "sprites/trex_clear.png")
-            .await;
-        game.load_team_sprite(team_abilities::BRONTO_TEAM, "sprites/bronto_clear.png")
-            .await;
-        game.load_team_sprite(team_abilities::PTERO_TEAM, "sprites/ptero_clear.png")
-            .await;
-        game.load_team_sprite(team_abilities::TRICERA_TEAM, "sprites/tricera_clear.png")
-            .await;
-        game.load_team_sprite(team_abilities::KRONO_TEAM, "sprites/krono.png")
-            .await;
-        game.mark_sprites_loaded();
+        game.load_all_sprites().await;
+    }
+
+    pub async fn tick_loading(&mut self) {
+        let AppScreen::Loading(loading) = &mut self.screen else {
+            return;
+        };
+        loading.advance().await;
+        if !loading.is_ready() {
+            return;
+        }
+        let game = loading.drain_game();
+        self.screen = AppScreen::Playing(game);
     }
 
     pub fn screen_mut(&mut self) -> &mut AppScreen {
@@ -86,18 +89,20 @@ impl App {
                     false
                 }
                 SetupAction::Start(config) => {
-                    self.screen = AppScreen::Playing(GameState::new_with_config(config));
+                    self.screen = AppScreen::Loading(LoadingScreen::new(config));
                     false
                 }
             },
+            AppScreen::Loading(_) => false,
             AppScreen::Playing(game) => game.update(),
         }
     }
 
-    pub fn draw(&self) {
-        match &self.screen {
+    pub fn draw(&mut self) {
+        match &mut self.screen {
             AppScreen::Launcher => draw_launcher(),
             AppScreen::Setup(menu) => menu.draw(),
+            AppScreen::Loading(loading) => loading.draw(),
             AppScreen::Playing(game) => game.draw(),
         }
     }
