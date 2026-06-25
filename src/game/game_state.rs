@@ -1351,11 +1351,16 @@ impl GameState {
     }
 
     pub fn new_with_config(config: MatchConfig) -> Self {
-        let map_label = config.map_kind.label();
+        let map_label = match config.map_kind {
+            crate::maps::MapKind::Pangaea => config.map_kind.label().to_string(),
+            crate::maps::MapKind::Random => {
+                format!("{} ({})", config.map_kind.label(), config.map_size.label())
+            }
+        };
         println!("\n=== PANGAEA ===");
         println!("Generating {map_label} map...");
 
-        let map = WorldMap::generate(config.map_kind);
+        let map = WorldMap::generate(config.map_kind, config.map_size);
         let mut rng = thread_rng();
         let walkable: HashSet<HexCoord> = map
             .get_tiles()

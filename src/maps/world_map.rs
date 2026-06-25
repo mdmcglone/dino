@@ -22,16 +22,43 @@ impl MapKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapSize {
+    Small,
+    Medium,
+    Large,
+}
+
+impl MapSize {
+    pub const ALL: [MapSize; 3] = [MapSize::Small, MapSize::Medium, MapSize::Large];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            MapSize::Small => "Small",
+            MapSize::Medium => "Medium",
+            MapSize::Large => "Large",
+        }
+    }
+
+    pub fn dimensions(self) -> (i32, i32) {
+        match self {
+            MapSize::Small => (25, 25),
+            MapSize::Medium => (35, 35),
+            MapSize::Large => (45, 45),
+        }
+    }
+}
+
 pub enum WorldMap {
     Pangaea(PangaeaMap),
     Random(RandomMap),
 }
 
 impl WorldMap {
-    pub fn generate(kind: MapKind) -> Self {
+    pub fn generate(kind: MapKind, map_size: MapSize) -> Self {
         match kind {
             MapKind::Pangaea => Self::Pangaea(PangaeaMap::new()),
-            MapKind::Random => Self::Random(RandomMap::new()),
+            MapKind::Random => Self::Random(RandomMap::with_size(map_size)),
         }
     }
 

@@ -1,6 +1,6 @@
 use macroquad::prelude::*;
 use super::team_abilities;
-use crate::maps::MapKind;
+use crate::maps::{MapKind, MapSize};
 
 pub const MIN_TEAMS: usize = 2;
 pub const MAX_TEAMS: usize = 4;
@@ -25,6 +25,7 @@ impl TeamSetup {
 pub struct MatchConfig {
     pub teams: Vec<TeamSetup>,
     pub map_kind: MapKind,
+    pub map_size: MapSize,
 }
 
 impl MatchConfig {
@@ -34,6 +35,7 @@ impl MatchConfig {
                 .map(TeamSetup::default_for_slot)
                 .collect(),
             map_kind: MapKind::Pangaea,
+            map_size: MapSize::Medium,
         }
     }
 

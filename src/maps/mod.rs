@@ -11,4 +11,4 @@ pub use terrain::TerrainType;
 pub use base_map::Map;
 pub use pangaea::PangaeaMap;
 pub use random_map::RandomMap;
-pub use world_map::{MapKind, WorldMap}; 
+pub use world_map::{MapKind, MapSize, WorldMap}; 

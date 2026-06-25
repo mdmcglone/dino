@@ -7,9 +7,10 @@ use super::{
     base_map::Map,
     map_postprocess::{
         decorate_land, ensure_traversible_connectivity, fill_water, get_tile,
-        place_mountain_cluster, DEFAULT_MAP_HEIGHT, DEFAULT_MAP_WIDTH,
+        place_mountain_cluster,
     },
     terrain::TerrainType,
+    world_map::MapSize,
 };
 
 pub struct RandomMap {
@@ -20,10 +21,15 @@ pub struct RandomMap {
 
 impl RandomMap {
     pub fn new() -> Self {
+        Self::with_size(MapSize::Medium)
+    }
+
+    pub fn with_size(size: MapSize) -> Self {
+        let (width, height) = size.dimensions();
         let mut map = Self {
             tiles: HashMap::new(),
-            width: DEFAULT_MAP_WIDTH,
-            height: DEFAULT_MAP_HEIGHT,
+            width,
+            height,
         };
         map.generate();
         map

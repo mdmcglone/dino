@@ -1,5 +1,5 @@
 use macroquad::prelude::*;
-use crate::maps::MapKind;
+use crate::maps::{MapKind, MapSize};
 use super::team_setup::{
     self, MatchConfig, TeamSetup, MAX_TEAMS, MIN_TEAMS, PLAYER_DINO_COUNT,
 };
@@ -7,12 +7,15 @@ use super::team_setup::{
 const PANEL_X: f32 = 80.0;
 const PANEL_W: f32 = 1240.0;
 const ROW_HEIGHT: f32 = 88.0;
-const ROW_START_Y: f32 = 248.0;
 const BTN_H: f32 = 44.0;
 const TEAM_ROW_Y: f32 = 132.0;
 const MAP_ROW_Y: f32 = 188.0;
+const MAP_SIZE_ROW_Y: f32 = 244.0;
+const TEAM_PANEL_START_PANGAEA: f32 = 248.0;
+const TEAM_PANEL_START_RANDOM: f32 = 304.0;
 
 const TEAM_COUNT_OPTIONS: usize = MAX_TEAMS - MIN_TEAMS + 1;
+const MAP_SIZE_OPTIONS: usize = MapSize::ALL.len();
 
 struct Layout {
     back: Rect,
@@ -21,6 +24,7 @@ struct Layout {
     team_count_buttons: [Rect; TEAM_COUNT_OPTIONS],
     map_pangaea: Rect,
     map_random: Rect,
+    map_size_buttons: [Rect; MAP_SIZE_OPTIONS],
     start: Rect,
     rows: Vec<RowLayout>,
     color_grid: Option<ColorGridLayout>,
@@ -56,6 +60,7 @@ pub struct SetupMenu {
     num_teams: usize,
     teams: Vec<TeamSetup>,
     map_kind: MapKind,
+    map_size: MapSize,
     color_picker_for: Option<usize>,
 }
 
@@ -73,6 +78,7 @@ impl SetupMenu {
             num_teams,
             teams: (0..num_teams).map(TeamSetup::default_for_slot).collect(),
             map_kind: MapKind::Pangaea,
+            map_size: MapSize::Medium,
             color_picker_for: None,
         }
     }
@@ -118,6 +124,7 @@ impl SetupMenu {
             return SetupAction::Start(MatchConfig {
                 teams: self.teams[..self.num_teams].to_vec(),
                 map_kind: self.map_kind,
+                map_size: self.map_size,
             });
         }
         if layout.team_minus.contains(mx, my) && self.num_teams > MIN_TEAMS {
@@ -146,6 +153,14 @@ impl SetupMenu {
         if layout.map_random.contains(mx, my) {
             self.map_kind = MapKind::Random;
             return SetupAction::None;
+        }
+
+        for (index, rect) in layout.map_size_buttons.iter().enumerate() {
+            let size = MapSize::ALL[index];
+            if rect.contains(mx, my) && self.map_kind == MapKind::Random {
+                self.map_size = size;
+                return SetupAction::None;
+            }
         }
 
         for (team_index, row) in layout.rows.iter().enumerate() {
@@ -238,29 +253,46 @@ impl SetupMenu {
             layout.map_random.contains(mx, my),
         );
 
+        if self.map_kind == MapKind::Random {
+            draw_text(
+                "Map size",
+                PANEL_X,
+                MAP_SIZE_ROW_Y + 6.0,
+                22.0,
+                Color::new(0.85, 0.88, 0.92, 1.0),
+            );
+            for (index, rect) in layout.map_size_buttons.iter().enumerate() {
+                let size = MapSize::ALL[index];
+                let selected = size == self.map_size;
+                let hover = rect.contains(mx, my);
+                draw_size_chip(size, rect, selected, hover);
+            }
+        }
+
+        let panel_y = self.team_panel_start_y();
         draw_rectangle(
             PANEL_X,
-            ROW_START_Y - 20.0,
+            panel_y - 20.0,
             PANEL_W,
             self.num_teams as f32 * ROW_HEIGHT + 12.0,
             Color::new(0.12, 0.14, 0.18, 0.95),
         );
         draw_rectangle_lines(
             PANEL_X,
-            ROW_START_Y - 20.0,
+            panel_y - 20.0,
             PANEL_W,
             self.num_teams as f32 * ROW_HEIGHT + 12.0,
             2.0,
             Color::new(0.35, 0.4, 0.48, 1.0),
         );
 
-        draw_text("Team", PANEL_X + 16.0, ROW_START_Y, 18.0, label_color());
-        draw_text("Dino", PANEL_X + 160.0, ROW_START_Y, 18.0, label_color());
-        draw_text("Color (click)", PANEL_X + 470.0, ROW_START_Y, 18.0, label_color());
-        draw_text("Or pick dino", PANEL_X + 590.0, ROW_START_Y, 18.0, label_color());
+        draw_text("Team", PANEL_X + 16.0, panel_y, 18.0, label_color());
+        draw_text("Dino", PANEL_X + 160.0, panel_y, 18.0, label_color());
+        draw_text("Color (click)", PANEL_X + 470.0, panel_y, 18.0, label_color());
+        draw_text("Or pick dino", PANEL_X + 590.0, panel_y, 18.0, label_color());
 
         for (team_index, row) in layout.rows.iter().enumerate() {
-            let row_y = ROW_START_Y + 24.0 + team_index as f32 * ROW_HEIGHT;
+            let row_y = panel_y + 24.0 + team_index as f32 * ROW_HEIGHT;
             draw_text(
                 &format!("Team {}", team_index + 1),
                 PANEL_X + 16.0,
@@ -358,6 +390,16 @@ impl SetupMenu {
             w: 140.0,
             h: BTN_H,
         };
+        let mut map_size_buttons =
+            [Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }; MAP_SIZE_OPTIONS];
+        for index in 0..MAP_SIZE_OPTIONS {
+            map_size_buttons[index] = Rect {
+                x: PANEL_X + 200.0 + index as f32 * 120.0,
+                y: MAP_SIZE_ROW_Y,
+                w: 108.0,
+                h: BTN_H,
+            };
+        }
         let start = Rect {
             x: screen_width() / 2.0 - 130.0,
             y: screen_height() - 88.0,
@@ -365,9 +407,10 @@ impl SetupMenu {
             h: 52.0,
         };
 
+        let panel_y = self.team_panel_start_y();
         let mut rows = Vec::with_capacity(self.num_teams);
         for team_index in 0..self.num_teams {
-            let row_y = ROW_START_Y + 24.0 + team_index as f32 * ROW_HEIGHT;
+            let row_y = panel_y + 24.0 + team_index as f32 * ROW_HEIGHT;
             let mut dino_chips = [Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }; PLAYER_DINO_COUNT];
             for dino in 0..PLAYER_DINO_COUNT {
                 dino_chips[dino] = Rect {
@@ -446,6 +489,7 @@ impl SetupMenu {
             team_count_buttons,
             map_pangaea,
             map_random,
+            map_size_buttons,
             start,
             rows,
             color_grid,
@@ -483,6 +527,14 @@ impl SetupMenu {
             grid.cancel.contains(mx, my),
             false,
         );
+    }
+
+    fn team_panel_start_y(&self) -> f32 {
+        if self.map_kind == MapKind::Random {
+            TEAM_PANEL_START_RANDOM
+        } else {
+            TEAM_PANEL_START_PANGAEA
+        }
     }
 
     fn sync_team_rows(&mut self) {
@@ -552,6 +604,39 @@ fn draw_map_chip(kind: MapKind, rect: &Rect, selected: bool, hover: bool) {
         },
     );
     let label = kind.label();
+    let font_size = 20.0;
+    let text_width = measure_text(label, None, font_size as u16, 1.0).width;
+    draw_text(
+        label,
+        rect.x + rect.w / 2.0 - text_width / 2.0,
+        rect.y + rect.h / 2.0 + font_size * 0.35,
+        font_size,
+        Color::new(0.95, 0.95, 0.95, 1.0),
+    );
+}
+
+fn draw_size_chip(size: MapSize, rect: &Rect, selected: bool, hover: bool) {
+    let bg = if selected {
+        Color::new(0.25, 0.45, 0.7, 1.0)
+    } else if hover {
+        Color::new(0.22, 0.28, 0.36, 1.0)
+    } else {
+        Color::new(0.16, 0.18, 0.22, 1.0)
+    };
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h, bg);
+    draw_rectangle_lines(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        2.0,
+        if selected {
+            Color::new(0.85, 0.9, 1.0, 1.0)
+        } else {
+            Color::new(0.4, 0.45, 0.52, 1.0)
+        },
+    );
+    let label = size.label();
     let font_size = 20.0;
     let text_width = measure_text(label, None, font_size as u16, 1.0).width;
     draw_text(
