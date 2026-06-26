@@ -682,40 +682,61 @@ impl HexMapRenderer {
 
     
     pub fn draw_stack_count(&self, coord: &HexCoord, count: usize) {
-        self.draw_team_stack_count(coord, 0, count, 0.0);
+        self.draw_team_stack_count(coord, 0, count, 0.0, count > 20);
     }
-    
-    pub fn draw_team_stack_count(&self, coord: &HexCoord, _team: usize, count: usize, offset_factor: f32) {
+
+    pub fn draw_team_stack_count(
+        &self,
+        coord: &HexCoord,
+        _team: usize,
+        count: usize,
+        offset_factor: f32,
+        attrition_active: bool,
+    ) {
         let (center_x, center_y) = self.hex_to_pixel(coord);
-        
-        // Apply horizontal offset for side-by-side battles (half sprite width from center)
+
         let sprite_size = 40.0 * self.zoom_level;
         let offset_x = offset_factor * sprite_size;
         let draw_x = center_x + offset_x;
-        
-        // Position the count indicator in the bottom-right corner of the sprite
+
         let count_x = draw_x + sprite_size * 0.3;
         let count_y = center_y + sprite_size * 0.3;
-        
+
         let text = count.to_string();
         let font_size = 20.0 * self.zoom_level;
-        
-        // Draw background circle
+
         let bg_radius = 10.0 * self.zoom_level;
         draw_circle(count_x, count_y, bg_radius, Color::new(0.0, 0.0, 0.0, 0.8));
-        
-        // Draw white border
         draw_circle_lines(count_x, count_y, bg_radius, 1.5, Color::new(1.0, 1.0, 1.0, 1.0));
-        
-        // Draw count text
+
         let text_width = measure_text(&text, None, font_size as u16, 1.0).width;
         draw_text(
             &text,
             count_x - text_width / 2.0,
             count_y + font_size * 0.35,
             font_size,
-            Color::new(1.0, 1.0, 1.0, 1.0)
+            Color::new(1.0, 1.0, 1.0, 1.0),
         );
+
+        if attrition_active {
+            let skull_x = count_x - bg_radius - 6.0 * self.zoom_level;
+            self.draw_attrition_skull(skull_x, count_y);
+        }
+    }
+
+    fn draw_attrition_skull(&self, x: f32, y: f32) {
+        let zoom = self.zoom_level;
+        let head_r = 7.0 * zoom;
+        draw_circle(x, y, head_r, Color::new(0.92, 0.92, 0.92, 1.0));
+        draw_circle_lines(x, y, head_r, 1.2, Color::new(0.25, 0.25, 0.25, 1.0));
+
+        let eye_r = 2.0 * zoom;
+        let eye_y = y - 1.5 * zoom;
+        draw_circle(x - 2.8 * zoom, eye_y, eye_r, Color::new(0.12, 0.12, 0.12, 1.0));
+        draw_circle(x + 2.8 * zoom, eye_y, eye_r, Color::new(0.12, 0.12, 0.12, 1.0));
+
+        let nose_r = 1.2 * zoom;
+        draw_circle(x, y + 1.0 * zoom, nose_r, Color::new(0.12, 0.12, 0.12, 1.0));
     }
     
     pub fn draw_nest(&self, nest: &Nest) {

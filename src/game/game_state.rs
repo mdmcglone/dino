@@ -37,6 +37,10 @@ const MIN_CYCLE_MULTIPLIER: f64 = 0.1;
 // Retreat time (in seconds) - minimum time in battle before retreat is allowed
 const RETREAT_TIME: f64 = 1.0;
 
+const ATTRITION_STACK_CAP: usize = 20;
+const ATTRITION_DEATH_INTERVAL: f64 = 3.0;
+const ATTRITION_RATE_BONUS_PER_EXCESS: f64 = 0.05;
+
 struct BattleTeamTimer {
     last_kill_time: f64,
     cycle_duration: f64,
@@ -289,6 +293,7 @@ pub struct GameState {
     next_player_id: usize,
     last_food_update: f64,
     last_siege_update: f64,
+    attrition_timers: HashMap<(HexCoord, usize), f64>,
     battle_states: HashMap<HexCoord, HashMap<usize, BattleTeamTimer>>,
     battle_defenders: HashMap<HexCoord, HashSet<usize>>,
     pre_battle_occupant: HashMap<HexCoord, usize>,
@@ -1019,6 +1024,86 @@ impl GameState {
             .unwrap_or(0)
     }
 
+    fn team_stack_count(&self, coord: HexCoord, team: usize) -> usize {
+        self.players
+            .values()
+            .filter(|player| player.position == coord && player.team == team)
+            .count()
+    }
+
+    fn attrition_kill_one(&mut self, coord: HexCoord, team: usize) {
+        if Self::is_hazard_team(team) {
+            return;
+        }
+
+        let victim_id = self
+            .players
+            .iter()
+            .filter(|(_, player)| {
+                player.position == coord && player.team == team && !player.selected
+            })
+            .map(|(id, _)| *id)
+            .min()
+            .or_else(|| {
+                self.players
+                    .iter()
+                    .filter(|(_, player)| player.position == coord && player.team == team)
+                    .map(|(id, _)| *id)
+                    .min()
+            });
+
+        if let Some(victim_id) = victim_id {
+            self.players.remove(&victim_id);
+            self.selected_player_ids.retain(|&id| id != victim_id);
+        }
+    }
+
+    fn update_attrition(&mut self, current_time: f64) {
+        let mut stack_counts: HashMap<(HexCoord, usize), usize> = HashMap::new();
+        for player in self.players.values() {
+            if Self::is_hazard_team(player.team) {
+                continue;
+            }
+            *stack_counts
+                .entry((player.position, player.team))
+                .or_insert(0) += 1;
+        }
+
+        self.attrition_timers.retain(|key, _| {
+            stack_counts.get(key).copied().unwrap_or(0) > ATTRITION_STACK_CAP
+        });
+
+        let overweight: Vec<(HexCoord, usize)> = stack_counts
+            .iter()
+            .filter(|(_, count)| **count > ATTRITION_STACK_CAP)
+            .map(|(key, _)| *key)
+            .collect();
+
+        for (coord, team) in overweight {
+            let mut last_death = *self
+                .attrition_timers
+                .entry((coord, team))
+                .or_insert(current_time);
+
+            loop {
+                let count = self.team_stack_count(coord, team);
+                if count <= ATTRITION_STACK_CAP {
+                    break;
+                }
+                let excess = count - ATTRITION_STACK_CAP;
+                let rate_multiplier = 1.0 + excess as f64 * ATTRITION_RATE_BONUS_PER_EXCESS;
+                let interval = ATTRITION_DEATH_INTERVAL / rate_multiplier;
+                if current_time - last_death < interval {
+                    break;
+                }
+                self.attrition_kill_one(coord, team);
+                last_death += interval;
+            }
+
+            self.attrition_timers.insert((coord, team), last_death);
+        }
+    }
+
     fn eliminate_enemy_at(&mut self, coord: HexCoord, killer_team: usize) {
         let target = self
             .players
@@ -1389,6 +1474,7 @@ impl GameState {
             next_player_id: 0,
             last_food_update: 0.0,
             last_siege_update: 0.0,
+            attrition_timers: HashMap::new(),
             battle_states: HashMap::new(),
             battle_defenders: HashMap::new(),
             pre_battle_occupant: HashMap::new(),
@@ -1756,6 +1842,7 @@ impl GameState {
         self.next_player_id = 0;
         self.last_food_update = get_time();
         self.last_siege_update = get_time();
+        self.attrition_timers.clear();
         self.players.clear();
         self.nests.clear();
         self.battle_states.clear();
@@ -1869,6 +1956,8 @@ impl GameState {
         
         // Phase 2: stop pathing for participants entering combat
         self.process_battles(&battle_coords, current_time);
+
+        self.update_attrition(current_time);
 
         self.update_krono_hazards(current_time, &battle_coords);
         
@@ -2135,7 +2224,14 @@ impl GameState {
                 if team_players.len() > 1 {
                     let team_selected = team_players.iter().filter(|p| p.selected).count();
                     let count_to_show = if team_selected > 0 { team_selected } else { team_players.len() };
-                    self.renderer.draw_team_stack_count(position, *team_id, count_to_show, offset_factor);
+                    let attrition_active = team_players.len() > ATTRITION_STACK_CAP;
+                    self.renderer.draw_team_stack_count(
+                        position,
+                        *team_id,
+                        count_to_show,
+                        offset_factor,
+                        attrition_active,
+                    );
                 }
                 
                 team_index += 1;
