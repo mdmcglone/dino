@@ -63,4 +63,16 @@ impl TerrainType {
                 | TerrainType::ShallowWater
         )
     }
+
+    /// Max stack size before attrition begins on this terrain.
+    pub fn attrition_stack_cap(&self) -> usize {
+        match self {
+            TerrainType::Mountain | TerrainType::Desert | TerrainType::Jungle => 15,
+            TerrainType::Savanna
+            | TerrainType::Forest
+            | TerrainType::ShallowWater
+            | TerrainType::Water => 20,
+            TerrainType::Grass | TerrainType::Hills => 25,
+        }
+    }
 } 

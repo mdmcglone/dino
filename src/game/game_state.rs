@@ -37,9 +37,8 @@ const MIN_CYCLE_MULTIPLIER: f64 = 0.1;
 // Retreat time (in seconds) - minimum time in battle before retreat is allowed
 const RETREAT_TIME: f64 = 1.0;
 
-const ATTRITION_STACK_CAP: usize = 20;
 const ATTRITION_DEATH_INTERVAL: f64 = 3.0;
-const ATTRITION_RATE_BONUS_PER_EXCESS: f64 = 0.05;
+const ATTRITION_RATE_BONUS_PER_EXCESS: f64 = 0.20;
 
 struct BattleTeamTimer {
     last_kill_time: f64,
@@ -1031,6 +1030,10 @@ impl GameState {
             .count()
     }
 
+    fn attrition_cap_at(&self, coord: &HexCoord) -> usize {
+        self.map.get_tile(coord).attrition_stack_cap()
+    }
+
     fn attrition_kill_one(&mut self, coord: HexCoord, team: usize) {
         if Self::is_hazard_team(team) {
             return;
@@ -1069,17 +1072,17 @@ impl GameState {
                 .or_insert(0) += 1;
         }
 
-        self.attrition_timers.retain(|key, _| {
-            stack_counts.get(key).copied().unwrap_or(0) > ATTRITION_STACK_CAP
-        });
-
-        let overweight: Vec<(HexCoord, usize)> = stack_counts
+        let overweight: HashSet<(HexCoord, usize)> = stack_counts
             .iter()
-            .filter(|(_, count)| **count > ATTRITION_STACK_CAP)
+            .filter(|((coord, _), count)| **count > self.attrition_cap_at(coord))
             .map(|(key, _)| *key)
             .collect();
 
+        self.attrition_timers
+            .retain(|key, _| overweight.contains(key));
+
         for (coord, team) in overweight {
+            let cap = self.attrition_cap_at(&coord);
             let mut last_death = *self
                 .attrition_timers
                 .entry((coord, team))
@@ -1087,10 +1090,10 @@ impl GameState {
 
             loop {
                 let count = self.team_stack_count(coord, team);
-                if count <= ATTRITION_STACK_CAP {
+                if count <= cap {
                     break;
                 }
-                let excess = count - ATTRITION_STACK_CAP;
+                let excess = count - cap;
                 let rate_multiplier = 1.0 + excess as f64 * ATTRITION_RATE_BONUS_PER_EXCESS;
                 let interval = ATTRITION_DEATH_INTERVAL / rate_multiplier;
                 if current_time - last_death < interval {
@@ -2224,7 +2227,8 @@ impl GameState {
                 if team_players.len() > 1 {
                     let team_selected = team_players.iter().filter(|p| p.selected).count();
                     let count_to_show = if team_selected > 0 { team_selected } else { team_players.len() };
-                    let attrition_active = team_players.len() > ATTRITION_STACK_CAP;
+                    let attrition_active =
+                        team_players.len() > self.attrition_cap_at(&position);
                     self.renderer.draw_team_stack_count(
                         position,
                         *team_id,

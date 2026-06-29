@@ -682,7 +682,7 @@ impl HexMapRenderer {
 
     
     pub fn draw_stack_count(&self, coord: &HexCoord, count: usize) {
-        self.draw_team_stack_count(coord, 0, count, 0.0, count > 20);
+        self.draw_team_stack_count(coord, 0, count, 0.0, false);
     }
 
     pub fn draw_team_stack_count(
